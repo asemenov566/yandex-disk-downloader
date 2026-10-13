@@ -65,7 +65,7 @@ export function createQueue({ loadEntries, saveEntry, deleteEntry = async () => 
     });
     return scheduling;
   }
-  async function snapshot(id, link) {
+  async function snapshot(id, link, allIssues = false) {
     let selected = entries.find(e => e.id === id);
     if (!selected && link) {
       try {
@@ -75,7 +75,7 @@ export function createQueue({ loadEntries, saveEntry, deleteEntry = async () => 
     }
     selected ||= entries.at(-1);
     const states = await Promise.all(entries.map(async entry => {
-      const state = await runnerFor(entry).command('status');
+      const state = await runnerFor(entry).command('status', { allIssues });
       return { entry, state };
     }));
     const chosen = states.find(s => s.entry === selected);
@@ -86,12 +86,14 @@ export function createQueue({ loadEntries, saveEntry, deleteEntry = async () => 
         title: state.job?.title || entry.job.path, running: state.running,
         queued: entry.wanted && !active.has(entry.id), phase: state.job.phase,
         done: state.job.summary.done, total: state.job.summary.total,
+        summary: state.job.summary, pages: state.job.pages, current: state.current,
+        issuesTotal: state.job.issuesTotal, ...(allIssues ? { issues: state.job.issues } : {}),
         publicUrl: entry.job.publicUrl, path: entry.job.path }))
     };
   }
   async function execute(action, args = {}) {
     await ready;
-    if (action === 'status') return snapshot(args.id, args.link);
+    if (action === 'status') return snapshot(args.id, args.link, args.allIssues);
     if (action === 'scan') {
       const job = newJob(args.link, args.mode, { deduplicate: args.deduplicate });
       let entry = entries.find(e => (e.wanted || active.has(e.id)) && e.job.publicUrl === job.publicUrl && e.job.path === job.path);
@@ -102,7 +104,7 @@ export function createQueue({ loadEntries, saveEntry, deleteEntry = async () => 
         } else { entry = { id: crypto.randomUUID(), job, wanted: true, action: 'start' }; entries.push(entry); }
         await saveEntry(entry); await runnerFor(entry).ready;
       }
-      await kick(); return snapshot(entry.id);
+      await kick(); return snapshot(entry.id, undefined, args.allIssues);
     }
     const entry = entries.find(e => e.id === args.id);
     if (!entry) throw new Error('Выберите задание в списке.');
@@ -115,10 +117,10 @@ export function createQueue({ loadEntries, saveEntry, deleteEntry = async () => 
       if (!active.has(entry.id)) { entry.wanted = true; entry.action = action; }
     } else if (action === 'report') await runnerFor(entry).command(action);
     else throw new Error('Неизвестная команда.');
-    await saveEntry(entry); await kick(); return snapshot(entry.id);
+    await saveEntry(entry); await kick(); return snapshot(entry.id, undefined, args.allIssues);
   }
   function command(action, args) {
-    if (action === 'status') return ready.then(() => snapshot(args?.id, args?.link));
+    if (action === 'status') return ready.then(() => snapshot(args?.id, args?.link, args?.allIssues));
     const result = serial.then(() => execute(action, args));
     serial = result.catch(() => {}); return result;
   }

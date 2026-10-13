@@ -26,14 +26,17 @@ export function createRunner({ loadJob, saveJob, resource, getPhoto, getOriginal
     await saveHistory(key(file), own);
     if (contentKey(file)) await saveHistory(contentKey(file), history);
   }
-  function snapshot() {
+  function snapshot({ allIssues = false } = {}) {
+    const issues = job ? [...job.directories.filter(d => d.state === 'failed'),
+      ...job.files.filter(f => ['failed', 'skipped'].includes(f.state) || f.cleanupError)] : [];
     return { running, current, notice, job: job ? {
       title: job.title, folder: job.folder, phase: job.phase, pass: job.pass, pages: job.pages, mode: job.mode,
       publicUrl: job.publicUrl, path: job.path, deduplicate: !!job.deduplicate, usePreviews: job.usePreviews, summary: summary(job),
       pendingDirectories: job.directories.filter(d => d.state === 'pending').length,
-      issues: [...job.directories.filter(d => d.state === 'failed'),
-        ...job.files.filter(f => ['failed', 'skipped'].includes(f.state) || f.cleanupError)]
-        .slice(-30).map(f => ({ name: f.name || f.path, reason: f.cleanupError || f.reason }))
+      issuesTotal: issues.length,
+      issues: (allIssues ? issues : issues.slice(-30)).map(f => ({ name: f.name || f.path,
+        path: [job.rootTitle || job.title || 'Каталог', ...f.path.split('/').filter(Boolean)].join(' / '),
+        reason: f.cleanupError || f.reason }))
     } : null };
   }
   function launch(work) {
@@ -252,7 +255,7 @@ export function createRunner({ loadJob, saveJob, resource, getPhoto, getOriginal
   const ready = (async () => { job = await loadJob(); await recover(); })();
   async function command(action, args = {}) {
     await ready;
-    if (action === 'status') return snapshot();
+    if (action === 'status') return snapshot(args);
     if (action === 'pause' || action === 'stop') {
       stopping = action === 'stop';
       if (running) controller.abort(new DOMException(stopping ? 'Стоп' : 'Пауза', 'AbortError'));

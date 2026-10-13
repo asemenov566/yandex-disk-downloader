@@ -65,6 +65,23 @@ test('browser restart preserves jobs but waits for explicit continue', async () 
   assert.equal(state.jobs.length, 1); assert.equal(state.running, false); assert.equal(state.queued, false);
 });
 
+test('all-job issue details are requested on demand without truncation and preserve full breadcrumb paths', async () => {
+  const a = newJob('https://disk.yandex.ru/d/a/2024/Trip');
+  a.rootTitle = 'Family'; a.title = 'Trip'; a.directories = []; a.phase = 'done';
+  a.files = Array.from({ length: 42 }, (_, n) => ({ name: `a${n}.JPG`, path: `/2024/Trip/a${n}.JPG`, state: 'failed', reason: 'Unavailable' }));
+  const b = newJob('https://disk.yandex.ru/d/b');
+  b.title = 'Another album'; b.phase = 'done'; b.directories = [{ path: '/Missing', state: 'failed', reason: 'HTTP 500' }];
+  const queue = createQueue({ loadEntries: async () => [{ id: 'a', job: a }, { id: 'b', job: b }], saveEntry: async () => {}, downloads: {} });
+  const compact = await queue.command('status', { id: 'a' });
+  assert.equal(compact.job.issues.length, 30); assert.equal(compact.job.issuesTotal, 42);
+  assert.equal(compact.jobs[0].issues, undefined);
+  const full = await queue.command('status', { id: 'a', allIssues: true });
+  assert.equal(full.jobs[0].issues.length, 42);
+  assert.equal(full.jobs[0].issues[0].path, 'Family / 2024 / Trip / a0.JPG');
+  assert.equal(full.jobs[1].issues[0].path, 'Another album / Missing');
+  assert.equal(full.jobs[1].summary.directoriesFailed, 1);
+});
+
 test('production default has no album count limit: seven independent jobs start together', async () => {
   const jobs = [];
   const unlimited = setup();

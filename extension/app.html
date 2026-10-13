@@ -1,7 +1,18 @@
 <!doctype html>
 <html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Загрузчик Яндекс Диска</title><link rel="stylesheet" href="app.css"></head>
 <body><main>
-<header><img class="mark" src="icons/icon-128.png" width="40" height="40" alt=""><div><h1>Загрузчик Яндекс Диска</h1><p>Файлы и папки из нескольких альбомов</p></div><span class="version">1.2.2</span></header>
+<header><img class="mark" src="icons/icon-128.png" width="40" height="40" alt=""><div class="brand"><h1>Загрузчик Яндекс Диска</h1><p>Файлы и папки из нескольких альбомов</p></div><div class="header-tools"><nav class="window-actions" aria-label="Открыть расширение отдельно"><button id="open-window" class="secondary">Открыть окно</button><button id="open-tab" class="secondary">Открыть вкладку</button></nav><span class="version">1.2.3</span></div></header>
+<details class="card overall-card" id="overall-card" hidden>
+<summary><span class="overall-heading">Общий прогресс<span id="overall-caption">Все задания</span></span><span class="badge" id="overall-percent">0%</span></summary>
+<div class="overall-body" aria-live="polite">
+<div class="metrics"><div><strong id="overall-total">0</strong><span>найдено файлов</span></div><div><strong id="overall-done">0</strong><span>сохранено</span></div><div><strong id="overall-skipped">0</strong><span>пропущено</span></div><div><strong id="overall-failed">0</strong><span>ошибок</span></div></div>
+<progress id="overall-progress" value="0" max="1" aria-label="Общий прогресс всех заданий"></progress>
+<p class="hint" id="overall-detail"></p>
+<p class="hint" id="overall-scope">Сумма всех заданий в списке, включая завершённые и приостановленные.</p>
+<ul class="overall-current" id="overall-current"></ul>
+<details class="issues overall-issues" id="overall-issues" hidden><summary>Ошибки и пропуски всех заданий · <span id="overall-issues-count">0</span></summary><p class="hint" id="overall-issues-loading">Откройте список, чтобы увидеть полный путь и причину.</p><ul id="overall-issues-list"></ul></details>
+</div>
+</details>
 <section class="card">
 <label for="link">Публичная ссылка на альбом или папку</label>
 <div class="input-row"><input id="link" type="url" placeholder="https://disk.yandex.ru/d/…" autocomplete="off"><button id="scan">Скачать всё</button></div>
