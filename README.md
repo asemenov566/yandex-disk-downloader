@@ -133,11 +133,3 @@ python scripts/build.py
 Архив появится в `dist/yandex-disk-downloader.zip`. Папка `dist` и ZIP исключены из Git. В GitHub Actions проверка запускается для ветки `main` и pull request. При отправке новой версии в `main` либо ручном запуске Release создаётся релиз с архивом. Уже выпущенная версия автоматически не перезаписывается. **ZIP публикуется только в Releases, не в исходниках.**
 
 Проверки охватывают пагинацию более 500 файлов, вложенные пути, обход подпапок, независимость очереди от окна, паузу/продолжение, восстановление сохранения, повреждённые изображения, размер/хеш и ограничения API. [Статус проверок](docs/verification.md).
-
-## Источники и лицензия
-
-Изучен [LencoDigitexer/yadisk-dl](https://github.com/LencoDigitexer/yadisk-dl): он получает ссылки из личной фотоленты через Selenium. Здесь самостоятельная реализация для публичных альбомов; код того проекта не переносился.
-
-Документация Chrome: [Downloads](https://developer.chrome.com/docs/extensions/reference/api/downloads), [Offscreen](https://developer.chrome.com/docs/extensions/reference/api/offscreen), [Popup](https://developer.chrome.com/docs/extensions/develop/ui/add-popup).
-
-Лицензия [MIT](LICENSE). Независимый проект, не официальный продукт Яндекса. Иконка сгенерирована для проекта; [описание и исходный запрос](docs/icon.md).
