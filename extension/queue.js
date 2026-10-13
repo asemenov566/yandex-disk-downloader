@@ -1,17 +1,25 @@
 import { createRunner } from './runner.js';
 import { newJob, parseLink } from './core.js';
+import { waitFor } from './wait.js';
 
 export function createQueue({ loadEntries, saveEntry, deleteEntry = async () => {}, concurrency = Infinity, ...dependencies }) {
   const entries = [], runners = new Map(), active = new Set();
   const locks = new Map();
-  async function withFileLock(key, work) {
+  async function withFileLock(key, work, signal) {
     const previous = locks.get(key) || Promise.resolve();
     let release;
     const lock = new Promise(resolve => { release = resolve; });
     locks.set(key, lock);
-    await previous;
-    try { return await work(); }
-    finally { release(); if (locks.get(key) === lock) locks.delete(key); }
+    let acquired = false;
+    const unlock = () => { release(); if (locks.get(key) === lock) locks.delete(key); };
+    try {
+      await waitFor(previous, { signal, timeout: null }); acquired = true;
+      return await work();
+    } finally {
+      // An aborted waiter returns immediately, but its successors must still
+      // wait for the original owner before entering the critical section.
+      if (acquired) unlock(); else previous.then(unlock, unlock);
+    }
   }
   let serial = Promise.resolve(), scheduling = Promise.resolve();
   const runnerFor = entry => {

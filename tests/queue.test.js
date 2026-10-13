@@ -95,3 +95,31 @@ test('restart removes old stopped duplicates while preserving the latest job', a
   const result = await queue.command('status');
   assert.equal(result.jobs.length, 1); assert.equal(result.id, 'new'); assert.deepEqual(removed, ['old']);
 });
+
+test('stopping a checksum-lock waiter is immediate and does not release another job\'s lock', async () => {
+  let finishPhoto, calls = 0, filename;
+  const history = new Map();
+  const queue = createQueue({ loadEntries: async () => [], saveEntry: async () => {},
+    loadHistory: async key => structuredClone(history.get(key) || {}),
+    saveHistory: async (key, value) => history.set(key, structuredClone(value)),
+    resource: async () => ({ type: 'dir', name: 'Album', _embedded: { total: 1, offset: 0, items: [
+      { type: 'file', name: 'a.JPG', path: '/a.JPG', size: 3, media_type: 'image', sha256: 'a'.repeat(64) }
+    ] } }),
+    getPhoto: async () => { calls++; await new Promise(resolve => { finishPhoto = resolve; }); return new Blob(['abc'], { type: 'image/jpeg' }); },
+    downloads: { download: async args => { filename = args.filename; return 1; },
+      search: async () => [{ id: 1, state: 'complete', exists: true, fileSize: 3, filename }], cancel: async () => {} },
+    sleep: async () => {}
+  });
+  await queue.command('scan', { link: 'https://disk.yandex.ru/d/a', deduplicate: true });
+  await until(() => calls === 1);
+  const b = await queue.command('scan', { link: 'https://disk.yandex.ru/d/b', deduplicate: true });
+  await tick();
+  await queue.command('stop', { id: b.id });
+  for (let n = 0; n < 10 && (await queue.command('status', { id: b.id })).running; n++) await tick();
+  assert.equal((await queue.command('status', { id: b.id })).running, false);
+  assert.equal((await queue.command('status', { id: b.id })).job.phase, 'stopped');
+  await queue.command('scan', { link: 'https://disk.yandex.ru/d/c', deduplicate: true });
+  await tick(); assert.equal(calls, 1);
+  finishPhoto(); await queue.waitUntilIdle();
+  assert.equal(calls, 1);
+});

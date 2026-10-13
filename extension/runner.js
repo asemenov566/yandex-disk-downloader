@@ -1,4 +1,5 @@
 import { newJob, summary, report, outputPath, consumePage } from './core.js';
+import { waitFor } from './wait.js';
 
 export function createRunner({ loadJob, saveJob, resource, getPhoto, getOriginalUrl, downloads,
   loadHistory = async () => ({}), saveHistory = async () => {}, withFileLock = async (_key, work) => work(),
@@ -27,7 +28,7 @@ export function createRunner({ loadJob, saveJob, resource, getPhoto, getOriginal
   }
   function snapshot() {
     return { running, current, notice, job: job ? {
-      title: job.title, folder: job.folder, phase: job.phase, pages: job.pages, mode: job.mode,
+      title: job.title, folder: job.folder, phase: job.phase, pass: job.pass, pages: job.pages, mode: job.mode,
       publicUrl: job.publicUrl, path: job.path, deduplicate: !!job.deduplicate, usePreviews: job.usePreviews, summary: summary(job),
       pendingDirectories: job.directories.filter(d => d.state === 'pending').length,
       issues: [...job.directories.filter(d => d.state === 'failed'),
@@ -76,7 +77,7 @@ export function createRunner({ loadJob, saveJob, resource, getPhoto, getOriginal
   }
   async function existing(record, file) {
     if (!record || !sameSource(record, file)) return null;
-    const [item] = await downloads.search({ id: record.downloadId });
+    const [item] = await waitFor(downloads.search({ id: record.downloadId }), { signal: controller?.signal });
     return item?.state === 'complete' && item.exists === true &&
       item.filename === record.savedPath && item.fileSize === record.savedBytes ? item : null;
   }
@@ -93,14 +94,14 @@ export function createRunner({ loadJob, saveJob, resource, getPhoto, getOriginal
     if (!history.original || !history.preview || history.original.downloadId === history.preview.downloadId) return;
     // Verify the new original again before considering removal of our own preview.
     if (!await existing(history.original, file)) return;
-    const [old] = await downloads.search({ id: history.preview.downloadId });
+    const [old] = await waitFor(downloads.search({ id: history.preview.downloadId }), { signal: controller?.signal });
     if (!old || old.exists === false) {
       delete history.preview; await persistHistory(file, history); return;
     }
     if (old.state !== 'complete' || old.filename !== history.preview.savedPath ||
         old.fileSize !== history.preview.savedBytes || !/\.preview\.(jpg|png|webp|gif)$/i.test(old.filename)) return;
     try {
-      await downloads.removeFile(history.preview.downloadId);
+      await waitFor(downloads.removeFile(history.preview.downloadId), { signal: controller?.signal });
       delete history.preview; delete file.cleanupError;
       await persistHistory(file, history);
     } catch (error) { file.cleanupError = 'Оригинал сохранён, но превью осталось: ' + error.message; }
@@ -120,17 +121,24 @@ export function createRunner({ loadJob, saveJob, resource, getPhoto, getOriginal
       file.savedKind = kind; file.savedBytes = direct ? file.size : source.size;
       file.savedPath = outputPath(job, file, kind, direct ? file.mime || '' : source.type);
       file.state = 'active'; file.reused = false; file.receiptSourceKey = key(file);
-      file.downloadId = await downloads.download({ url, filename: file.savedPath, saveAs: false, conflictAction: 'uniquify' });
+      delete file.downloadId;
+      current = file.name + ' · ожидаем начала загрузки (до 25 с)';
+      await checkpoint();
+      file.downloadId = await waitFor(downloads.download({ url, filename: file.savedPath, saveAs: false, conflictAction: 'uniquify' }), {
+        signal, timeout: 25000, message: 'Chrome не подтвердил начало загрузки за 25 секунд.',
+        onLateValue: id => Number.isInteger(id) ? waitFor(downloads.cancel(id), { timeout: 5000 }) : undefined
+      });
+      signal.throwIfAborted();
       await checkpoint();
       let lastBytes = 0, lastData = now();
       const deadline = now() + 120000;
       while (true) {
-        const [item] = await downloads.search({ id: file.downloadId });
+        const [item] = await waitFor(downloads.search({ id: file.downloadId }), { signal });
         if (!item) throw new Error('Chrome потерял запись о загрузке.');
         if (item.state === 'complete') {
           if (item.exists === false) throw new Error('Сохранённый файл не найден.');
           if (Number.isFinite(file.savedBytes) && item.fileSize !== file.savedBytes) {
-            if (downloads.discardInvalid) await downloads.discardInvalid({ id: file.downloadId, expectedSize: file.savedBytes });
+            if (downloads.discardInvalid) await waitFor(downloads.discardInvalid({ id: file.downloadId, expectedSize: file.savedBytes }), { signal });
             throw new Error('Размер сохранённого файла не совпал.');
           }
           file.savedPath = item.filename; file.savedBytes = item.fileSize;
@@ -140,13 +148,16 @@ export function createRunner({ loadJob, saveJob, resource, getPhoto, getOriginal
         signal.throwIfAborted();
         if (direct) {
           if (item.bytesReceived > lastBytes) { lastBytes = item.bytesReceived; lastData = now(); }
-          current = `${file.name} · ${(lastBytes / 1048576).toFixed(1)} МБ`;
+          const total = Number.isFinite(file.size) ? ` из ${(file.size / 1048576).toFixed(1)}` : '';
+          const waiting = Math.floor((now() - lastData) / 1000);
+          current = `${file.name} · ${(lastBytes / 1048576).toFixed(1)}${total} МБ` +
+            (waiting >= 2 ? ` · ждём данные ${waiting}/25 с` : '');
           if (now() - lastData >= 25000) throw new Error('Нет данных от файлового сервера 25 секунд.');
         } else if (now() > deadline) throw new Error('Chrome не завершил сохранение. Проверьте загрузки браузера.');
         await sleep(400);
       }
     } finally {
-      if (!complete && Number.isInteger(file.downloadId)) await downloads.cancel(file.downloadId).catch(() => {});
+      if (!complete && Number.isInteger(file.downloadId)) await waitFor(downloads.cancel(file.downloadId), { timeout: 5000 }).catch(() => {});
       if (!direct) URL.revokeObjectURL(url);
     }
   }
@@ -162,6 +173,7 @@ export function createRunner({ loadJob, saveJob, resource, getPhoto, getOriginal
     let kind = file.kind === 'photo' && (job.mode === 'preview' || (job.usePreviews && !preview)) ? 'preview' : 'original';
     if (kind === 'preview' && preview) { reuse(file, preview, 'Копия уже сохранена'); return; }
     if (file.kind !== 'photo' && getOriginalUrl) {
+      current = file.name + ' · получаем ссылку (до 20 с)';
       const url = await getOriginalUrl(job, file, signal);
       await saveDownload(url, file, 'original', signal, true);
     } else {
@@ -187,11 +199,16 @@ export function createRunner({ loadJob, saveJob, resource, getPhoto, getOriginal
   }
   async function download(signal) {
     job.phase = 'downloading'; await checkpoint();
-    for (const file of job.files.filter(f => f.state === 'pending')) {
+    const pending = job.files.filter(f => f.state === 'pending');
+    // All directories have already been scanned. Prioritize photos across the
+    // whole selected tree, including when resuming an older saved queue.
+    const ordered = [...pending.filter(f => f.kind === 'photo'), ...pending.filter(f => f.kind !== 'photo')];
+    for (const file of ordered) {
+      job.pass = file.kind === 'photo' ? 'photos' : 'other';
       signal.throwIfAborted(); current = file.name;
       try {
         const lockKey = job.deduplicate && contentKey(file) || key(file);
-        await withFileLock(lockKey, async () => { signal.throwIfAborted(); await downloadOne(file, signal); });
+        await withFileLock(lockKey, async () => { signal.throwIfAborted(); await downloadOne(file, signal); }, signal);
       }
       catch (error) {
         if (signal.aborted || error.status === 429) {
@@ -216,11 +233,11 @@ export function createRunner({ loadJob, saveJob, resource, getPhoto, getOriginal
     }
     for (const file of job.files) {
       if (file.state === 'active') {
-        const [item] = Number.isInteger(file.downloadId) ? await downloads.search({ id: file.downloadId }) : [];
+        const [item] = Number.isInteger(file.downloadId) ? await waitFor(downloads.search({ id: file.downloadId })) : [];
         if (item?.state === 'complete' && item.exists !== false && item.fileSize === file.savedBytes) {
           file.state = 'done'; file.savedPath = item.filename;
         } else {
-          if (item?.state === 'in_progress') await downloads.cancel(item.id).catch(() => {});
+          if (item?.state === 'in_progress') await waitFor(downloads.cancel(item.id), { timeout: 5000 }).catch(() => {});
           file.state = 'pending'; delete file.downloadId;
         }
       }

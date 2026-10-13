@@ -272,3 +272,118 @@ test('native download without bytes times out after 25 seconds and is cancelled'
   assert(cancelled); assert(time >= 25000 && time < 26000);
   assert.equal(h.saved().files[0].state, 'failed'); assert.match(h.saved().files[0].reason, /25 секунд/);
 });
+
+test('photos from every nested folder precede videos and documents, including a restored queue', async () => {
+  const h = harness({ resource: async (_job, path) => path === '/' ? dir('Album', [
+    photo('/a.mov', { media_type: 'video' }), photo('/b.pdf', { media_type: 'document' }), photo('/c.JPG'),
+    { type: 'dir', name: 'Sub', path: '/Sub' }
+  ]) : dir('Sub', [photo('/Sub/a.mov', { media_type: 'video' }), photo('/Sub/b.JPG')]) });
+  await h.runner.command('scan', { link: 'https://disk.yandex.ru/d/test', download: false }); await h.runner.waitUntilIdle();
+  const saved = h.saved(), order = [], passes = [];
+  const restored = harness({ loadJob: async () => saved, getPhoto: async (_job, file) => {
+    order.push(file.path); passes.push((await restored.runner.command('status')).job.pass);
+    return new Blob(['abc'], { type: 'image/jpeg' });
+  }});
+  await restored.runner.command('start'); await restored.runner.waitUntilIdle();
+  assert.deepEqual(order, ['/c.JPG', '/Sub/b.JPG', '/a.mov', '/b.pdf', '/Sub/a.mov']);
+  assert.deepEqual(passes, ['photos', 'photos', 'other', 'other', 'other']);
+  assert.equal(restored.saved().files.filter(f => f.state === 'done').length, 5);
+});
+
+test('a hung native start expires, next file proceeds, and a late download ID is cancelled', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  let enter, late, starts = 0;
+  const entered = new Promise(resolve => { enter = resolve; });
+  const cancelled = [], names = new Map();
+  const h = harness({
+    resource: async () => dir('Album', [photo('/a.mov', { media_type: 'video' }), photo('/b.mov', { media_type: 'video' })]),
+    getOriginalUrl: async (_job, file) => 'https://downloader.disk.yandex.ru/disk/' + file.name,
+    downloads: {
+      download: args => {
+        starts++; names.set(starts, args.filename);
+        if (starts === 1) { enter(); return new Promise(resolve => { late = resolve; }); }
+        return Promise.resolve(starts);
+      },
+      search: async ({ id }) => [{ id, state: 'complete', exists: true, fileSize: 3, filename: names.get(id) }],
+      cancel: async id => { cancelled.push(id); }
+    }
+  });
+  await h.runner.command('scan', { link: 'https://disk.yandex.ru/d/test' }); await entered;
+  assert.match((await h.runner.command('status')).current, /ожидаем начала/);
+  t.mock.timers.tick(25000); await h.runner.waitUntilIdle();
+  assert.equal(h.saved().files[0].state, 'failed');
+  assert.match(h.saved().files[0].reason, /не подтвердил начало/);
+  assert.equal(h.saved().files[1].state, 'done');
+  assert.equal(starts, 2);
+  late(1); await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual(cancelled, [1]);
+});
+
+test('pause interrupts pending native start immediately and cancels its eventual ID', async () => {
+  let enter, late;
+  const entered = new Promise(resolve => { enter = resolve; }), cancelled = [];
+  const h = harness({
+    resource: async () => dir('Album', [photo('/a.mov', { media_type: 'video' })]),
+    getOriginalUrl: async () => 'https://downloader.disk.yandex.ru/disk/video',
+    downloads: { download: () => { enter(); return new Promise(resolve => { late = resolve; }); }, cancel: async id => { cancelled.push(id); } }
+  });
+  await h.runner.command('scan', { link: 'https://disk.yandex.ru/d/test' }); await entered;
+  await h.runner.command('pause'); await h.runner.waitUntilIdle();
+  assert.equal(h.saved().files[0].state, 'pending');
+  assert.equal((await h.runner.command('status')).running, false);
+  late(42); await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual(cancelled, [42]);
+});
+
+test('stop interrupts pending native start, preserves pending work and prevents automatic continuation', async () => {
+  let enter, late;
+  const entered = new Promise(resolve => { enter = resolve; }), cancelled = [];
+  const h = harness({
+    resource: async () => dir('Album', [photo('/a.mov', { media_type: 'video' })]),
+    getOriginalUrl: async () => 'https://downloader.disk.yandex.ru/disk/video',
+    downloads: { download: () => { enter(); return new Promise(resolve => { late = resolve; }); }, cancel: async id => { cancelled.push(id); } }
+  });
+  await h.runner.command('scan', { link: 'https://disk.yandex.ru/d/test' }); await entered;
+  await h.runner.command('stop'); await h.runner.waitUntilIdle();
+  assert.equal(h.saved().phase, 'stopped'); assert.equal(h.saved().files[0].state, 'pending');
+  await assert.rejects(h.runner.command('start'), /остановлено/);
+  late(42); await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual(cancelled, [42]);
+});
+
+test('a hung browser status call expires and does not block the queue during cancellation', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  let enter, cancelStarted;
+  const entered = new Promise(resolve => { enter = resolve; });
+  const cancelling = new Promise(resolve => { cancelStarted = resolve; });
+  const h = harness({
+    resource: async () => dir('Album', [photo('/a.mov', { media_type: 'video' })]),
+    getOriginalUrl: async () => 'https://downloader.disk.yandex.ru/disk/video',
+    downloads: { download: async () => 1,
+      search: () => { enter(); return new Promise(() => {}); },
+      cancel: () => { cancelStarted(); return new Promise(() => {}); } }
+  });
+  await h.runner.command('scan', { link: 'https://disk.yandex.ru/d/test' }); await entered;
+  t.mock.timers.tick(10000); await cancelling;
+  t.mock.timers.tick(5000); await h.runner.waitUntilIdle();
+  assert.equal(h.saved().files[0].state, 'failed');
+  assert.match(h.saved().files[0].reason, /не ответил за 10 секунд/);
+});
+
+test('a large native video is allowed to continue while bytes keep arriving', async () => {
+  let time = 0, filename, cancelled = false;
+  const h = harness({
+    resource: async () => dir('Album', [photo('/video.mov', { media_type: 'video', size: 1000000 })]),
+    getOriginalUrl: async () => 'https://downloader.disk.yandex.ru/disk/video',
+    now: () => time, sleep: async ms => { time += ms; },
+    downloads: {
+      download: async args => { filename = args.filename; return 1; },
+      search: async () => [time >= 600000
+        ? { state: 'complete', exists: true, fileSize: 1000000, filename }
+        : { state: 'in_progress', bytesReceived: Math.floor(time / 20000) * 1000 }],
+      cancel: async () => { cancelled = true; }
+    }
+  });
+  await h.runner.command('scan', { link: 'https://disk.yandex.ru/d/test' }); await h.runner.waitUntilIdle();
+  assert(time >= 600000); assert.equal(cancelled, false); assert.equal(h.saved().files[0].state, 'done');
+});

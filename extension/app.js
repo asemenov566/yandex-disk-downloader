@@ -34,7 +34,8 @@ function render() {
   $('album').textContent = job.title || 'Получаем название…';
   $('destination').textContent = 'Загрузки / ' + (job.folder || 'yandex-disk / название папки').replaceAll('/', ' / ');
   $('phase').textContent = state.queued ? 'Ожидает свободного места' :
-    (!running && ['scanning','downloading'].includes(job.phase) ? 'Пауза · ' : '') + labels[job.phase];
+    (!running && ['scanning','downloading'].includes(job.phase) ? 'Пауза · ' : '') +
+    (job.phase === 'downloading' && job.pass ? (job.pass === 'photos' ? 'Сначала фотографии' : 'Видео, документы и остальные файлы') : labels[job.phase]);
   $('quality').textContent = job.usePreviews ? 'Фото: копии' : job.mode === 'original' ? 'Оригиналы' : 'Авто';
   $('total').textContent = s.total.toLocaleString('ru-RU');
   for (const key of ['done','skipped']) $(key).textContent = s[key].toLocaleString('ru-RU');
