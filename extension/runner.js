@@ -1,0 +1,248 @@
+import { newJob, summary, report, outputPath, consumePage } from './core.js';
+
+export function createRunner({ loadJob, saveJob, resource, getPhoto, getOriginalUrl, downloads,
+  loadHistory = async () => ({}), saveHistory = async () => {},
+  sleep = ms => new Promise(resolve => setTimeout(resolve, ms)), now = () => Date.now() }) {
+  let job = null, running = false, controller, current = '', notice = '', stopping = false;
+  let runPromise = Promise.resolve();
+  const checkpoint = () => saveJob(job);
+  const key = file => JSON.stringify([job.publicUrl, file.path]);
+  function snapshot() {
+    return { running, current, notice, job: job ? {
+      title: job.title, folder: job.folder, phase: job.phase, pages: job.pages, mode: job.mode,
+      publicUrl: job.publicUrl, path: job.path, usePreviews: job.usePreviews, summary: summary(job),
+      pendingDirectories: job.directories.filter(d => d.state === 'pending').length,
+      issues: [...job.directories.filter(d => d.state === 'failed'),
+        ...job.files.filter(f => ['failed', 'skipped'].includes(f.state) || f.cleanupError)]
+        .slice(-30).map(f => ({ name: f.name || f.path, reason: f.cleanupError || f.reason }))
+    } : null };
+  }
+  function launch(work) {
+    running = true; stopping = false; controller = new AbortController(); notice = '';
+    runPromise = (async () => {
+      try { await work(controller.signal); }
+      catch (error) { notice = controller.signal.aborted ? 'Приостановлено. Можно продолжить.' : error.message; }
+      finally {
+        if (stopping && job) { job.phase = 'stopped'; notice = 'Остановлено. Сохранённые файлы учтём при новом запуске.'; }
+        running = false; current = '';
+        if (job) await checkpoint().catch(error => { notice = error.message; });
+      }
+    })();
+  }
+  async function scan(signal) {
+    job.phase = 'scanning';
+    if (job.path !== '/' && !job.rootTitle) {
+      job.rootTitle = (await resource(job, '/', 0, signal)).name;
+      if (!job.rootTitle) throw new Error('Яндекс не вернул название корневой папки.');
+      await checkpoint();
+    }
+    while (job.directories.some(d => d.state === 'pending')) {
+      signal.throwIfAborted();
+      const dir = job.directories.find(d => d.state === 'pending');
+      current = `Список: ${dir.path} · начиная с файла ${dir.offset + 1}`;
+      try { consumePage(job, dir, await resource(job, dir.path, dir.offset, signal)); }
+      catch (error) {
+        signal.throwIfAborted();
+        if (error.status === 429) throw error;
+        dir.state = 'failed'; dir.reason = error.message;
+        if (dir.root && !job.title) { await checkpoint(); throw error; }
+      }
+      await checkpoint();
+    }
+    job.phase = 'ready'; await checkpoint();
+  }
+  function sameSource(record, file) {
+    return Number.isFinite(file.size) && record.size === file.size &&
+      (!file.sha256 || record.sha256 === file.sha256) &&
+      (!file.modified || record.modified === file.modified);
+  }
+  async function existing(record, file) {
+    if (!record || !sameSource(record, file)) return null;
+    const [item] = await downloads.search({ id: record.downloadId });
+    return item?.state === 'complete' && item.exists === true &&
+      item.filename === record.savedPath && item.fileSize === record.savedBytes ? item : null;
+  }
+  function recordOf(file) {
+    return { downloadId: file.downloadId, savedPath: file.savedPath, savedBytes: file.savedBytes,
+      savedKind: file.savedKind, size: file.size, sha256: file.sha256, modified: file.modified };
+  }
+  function reuse(file, record, reason = '') {
+    Object.assign(file, record, { state: 'done', reused: true, reason });
+  }
+  async function removeOldPreview(file, history) {
+    if (!history.original || !history.preview || history.original.downloadId === history.preview.downloadId) return;
+    // Verify the new original again before considering removal of our own preview.
+    if (!await existing(history.original, file)) return;
+    const [old] = await downloads.search({ id: history.preview.downloadId });
+    if (!old || old.exists === false) {
+      delete history.preview; await saveHistory(key(file), history); return;
+    }
+    if (old.state !== 'complete' || old.filename !== history.preview.savedPath ||
+        old.fileSize !== history.preview.savedBytes || !/\.preview\.(jpg|png|webp|gif)$/i.test(old.filename)) return;
+    try {
+      await downloads.removeFile(history.preview.downloadId);
+      delete history.preview; delete file.cleanupError;
+      await saveHistory(key(file), history);
+    } catch (error) { file.cleanupError = 'Оригинал сохранён, но превью осталось: ' + error.message; }
+  }
+  async function remember(file) {
+    const history = await loadHistory(key(file)) || {};
+    history[file.savedKind] = recordOf(file);
+    // Persist original before deleting anything, so interruption never loses the receipt.
+    await saveHistory(key(file), history);
+    if (file.savedKind === 'original') await removeOldPreview(file, history);
+  }
+  async function saveDownload(source, file, kind, signal, direct = false) {
+    signal.throwIfAborted();
+    const url = direct ? source : URL.createObjectURL(source);
+    let complete = false;
+    try {
+      file.savedKind = kind; file.savedBytes = direct ? file.size : source.size;
+      file.savedPath = outputPath(job, file, kind, direct ? file.mime || '' : source.type);
+      file.state = 'active'; file.reused = false;
+      file.downloadId = await downloads.download({ url, filename: file.savedPath, saveAs: false, conflictAction: 'uniquify' });
+      await checkpoint();
+      let lastBytes = 0, lastData = now();
+      const deadline = now() + 120000;
+      while (true) {
+        const [item] = await downloads.search({ id: file.downloadId });
+        if (!item) throw new Error('Chrome потерял запись о загрузке.');
+        if (item.state === 'complete') {
+          if (item.exists === false) throw new Error('Сохранённый файл не найден.');
+          if (Number.isFinite(file.savedBytes) && item.fileSize !== file.savedBytes) {
+            if (downloads.discardInvalid) await downloads.discardInvalid({ id: file.downloadId, expectedSize: file.savedBytes });
+            throw new Error('Размер сохранённого файла не совпал.');
+          }
+          file.savedPath = item.filename; file.savedBytes = item.fileSize;
+          complete = true; return;
+        }
+        if (item.state === 'interrupted') throw new Error('Chrome: ' + (item.error || 'загрузка прервана'));
+        signal.throwIfAborted();
+        if (direct) {
+          if (item.bytesReceived > lastBytes) { lastBytes = item.bytesReceived; lastData = now(); }
+          current = `${file.name} · ${(lastBytes / 1048576).toFixed(1)} МБ`;
+          if (now() - lastData >= 25000) throw new Error('Нет данных от файлового сервера 25 секунд.');
+        } else if (now() > deadline) throw new Error('Chrome не завершил сохранение. Проверьте загрузки браузера.');
+        await sleep(400);
+      }
+    } finally {
+      if (!complete && Number.isInteger(file.downloadId)) await downloads.cancel(file.downloadId).catch(() => {});
+      if (!direct) URL.revokeObjectURL(url);
+    }
+  }
+  async function downloadOne(file, signal) {
+    const history = await loadHistory(key(file)) || {};
+    if (await existing(history.original, file)) {
+      reuse(file, history.original, 'Уже сохранён полный файл');
+      await removeOldPreview(file, history); return;
+    }
+    const preview = await existing(history.preview, file) ? history.preview : null;
+    // Revisit originals for existing previews on every fresh scan, even after prior failures.
+    let kind = file.kind === 'photo' && (job.mode === 'preview' || (job.usePreviews && !preview)) ? 'preview' : 'original';
+    if (kind === 'preview' && preview) { reuse(file, preview, 'Копия уже сохранена'); return; }
+    if (file.kind !== 'photo' && getOriginalUrl) {
+      const url = await getOriginalUrl(job, file, signal);
+      await saveDownload(url, file, 'original', signal, true);
+    } else {
+      const progress = bytes => { current = `${file.name} · ${(bytes / 1048576).toFixed(1)} МБ`; };
+      let blob;
+      try {
+        blob = await getPhoto(job, file, kind, signal, progress);
+        if (kind === 'original' && file.kind === 'photo') job.originalFailures = 0;
+      } catch (error) {
+        signal.throwIfAborted();
+        if (error.status === 429 || kind !== 'original' || job.mode !== 'auto' || file.kind !== 'photo') throw error;
+        file.originalError = error.message; job.originalFailures++;
+        if (job.originalFailures >= 3) job.usePreviews = true;
+        if (preview) { reuse(file, preview, 'Оригинал пока недоступен: ' + error.message); return; }
+        kind = 'preview'; current = file.name + ' · пробуем копию для просмотра';
+        blob = await getPhoto(job, file, kind, signal, progress);
+      }
+      await saveDownload(blob, file, kind, signal);
+    }
+    file.state = 'done';
+    file.reason = file.savedKind === 'preview' && file.originalError ? 'Оригинал недоступен: ' + file.originalError : '';
+    await remember(file);
+  }
+  async function download(signal) {
+    job.phase = 'downloading'; await checkpoint();
+    for (const file of job.files.filter(f => f.state === 'pending')) {
+      signal.throwIfAborted(); current = file.name;
+      try { await downloadOne(file, signal); }
+      catch (error) {
+        if (signal.aborted || error.status === 429) {
+          if (file.state !== 'done') { file.state = 'pending'; delete file.downloadId; }
+          await checkpoint(); throw error;
+        }
+        file.state = 'failed'; file.reason = error.message;
+      }
+      await checkpoint(); await sleep(250);
+    }
+    job.phase = 'done'; await checkpoint();
+    notice = summary(job).failed || summary(job).directoriesFailed ?
+      'Готово с ошибками. Их можно повторить; остальные файлы сохранены.' :
+      'Готово. Файлы сохранены в папку альбома внутри «Загрузки / yandex-disk».';
+  }
+  async function recover() {
+    if (!job) return;
+    // Upgrade older photo-only queues without losing completed downloads.
+    if (job.version < 2) {
+      for (const file of job.files) if (file.state === 'skipped' && file.size !== 0) { file.state = 'pending'; file.reason = ''; }
+      job.version = 2;
+    }
+    for (const file of job.files) {
+      if (file.state === 'active') {
+        const [item] = Number.isInteger(file.downloadId) ? await downloads.search({ id: file.downloadId }) : [];
+        if (item?.state === 'complete' && item.exists !== false && item.fileSize === file.savedBytes) {
+          file.state = 'done'; file.savedPath = item.filename;
+        } else {
+          if (item?.state === 'in_progress') await downloads.cancel(item.id).catch(() => {});
+          file.state = 'pending'; delete file.downloadId;
+        }
+      }
+      if (file.state === 'done' && Number.isInteger(file.downloadId) && file.savedKind) {
+        const history = await loadHistory(key(file)) || {};
+        if (!history[file.savedKind]) { history[file.savedKind] = recordOf(file); await saveHistory(key(file), history); }
+      }
+    }
+    await checkpoint();
+  }
+  const ready = (async () => { job = await loadJob(); await recover(); })();
+  async function command(action, args = {}) {
+    await ready;
+    if (action === 'status') return snapshot();
+    if (action === 'pause' || action === 'stop') {
+      stopping = action === 'stop';
+      if (running) controller.abort(new DOMException(stopping ? 'Стоп' : 'Пауза', 'AbortError'));
+      else if (stopping && job) { job.phase = 'stopped'; await checkpoint(); notice = 'Остановлено. Сохранённые файлы учтём при новом запуске.'; }
+      return snapshot();
+    }
+    if (running) throw new Error('Это задание уже выполняется.');
+    if (action === 'scan') {
+      const next = newJob(args.link, args.mode);
+      if (job && job.phase !== 'stopped' && (summary(job).pending || job.directories.some(d => d.state === 'pending')) && !args.replace) {
+        throw new Error('Есть незавершённая очередь.');
+      }
+      launch(async signal => { job = next; await checkpoint(); await scan(signal); if (args.download !== false) await download(signal); });
+    } else if (action === 'start' || action === 'retry') {
+      if (!job) throw new Error('Сначала укажите ссылку.');
+      if (job.phase === 'stopped') throw new Error('Задание остановлено. Нажмите «Скачать всё», чтобы проверить папку заново.');
+      launch(async signal => {
+        if (action === 'retry') {
+          for (const f of job.files.filter(f => f.state === 'failed')) { f.state = 'pending'; f.reason = ''; delete f.downloadId; }
+          for (const d of job.directories.filter(d => d.state === 'failed')) { d.state = 'pending'; d.reason = ''; }
+        }
+        if (job.directories.some(d => d.state === 'pending')) await scan(signal);
+        if (!job.files.some(f => f.state === 'done') && args.mode) { job.mode = args.mode; job.usePreviews = args.mode === 'preview'; }
+        await download(signal);
+      });
+    } else if (action === 'report') {
+      if (!job?.folder) throw new Error('Папка ещё не прочитана.');
+      const url = URL.createObjectURL(new Blob([report(job)], { type: 'text/csv;charset=utf-8' }));
+      try { await downloads.download({ url, filename: job.folder + '/download-report.csv', saveAs: false, conflictAction: 'uniquify' }); }
+      finally { setTimeout(() => URL.revokeObjectURL(url), 60000); }
+    } else throw new Error('Неизвестная команда.');
+    return snapshot();
+  }
+  return { command, ready, waitUntilIdle: () => runPromise };
+}

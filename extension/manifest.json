@@ -1,0 +1,36 @@
+{
+  "manifest_version": 3,
+  "name": "Загрузчик Яндекс Диска",
+  "version": "1.2.0",
+  "description": "Скачивание публичных папок: несколько заданий, вложенные папки, оригиналы, копии фото и продолжение без дубликатов.",
+  "minimum_chrome_version": "124",
+  "permissions": [
+    "downloads",
+    "activeTab",
+    "offscreen"
+  ],
+  "icons": {
+    "16": "icons/icon-16.png",
+    "32": "icons/icon-32.png",
+    "48": "icons/icon-48.png",
+    "128": "icons/icon-128.png"
+  },
+  "host_permissions": [
+    "https://cloud-api.yandex.net/*",
+    "https://downloader.disk.yandex.ru/*",
+    "https://*.storage.yandex.net/*"
+  ],
+  "action": {
+    "default_title": "Скачать файлы с Яндекс Диска",
+    "default_popup": "app.html",
+    "default_icon": {
+      "16": "icons/icon-16.png",
+      "32": "icons/icon-32.png",
+      "48": "icons/icon-48.png",
+      "128": "icons/icon-128.png"
+    }
+  },
+  "background": {
+    "service_worker": "background.js"
+  }
+}
