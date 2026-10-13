@@ -5,6 +5,8 @@ import { newJob } from '../extension/core.js';
 
 const photo = (path, extra = {}) => ({ type: 'file', name: path.split('/').pop(), path, size: 3, media_type: 'image', ...extra });
 const dir = (name, items, offset = 0, total = items.length) => ({ type: 'dir', name, _embedded: { items, offset, total } });
+const duplicatePhotos = () => [photo('/a.JPG', { sha256: 'a'.repeat(64), modified: '2026-01-01' }),
+  photo('/a (1).JPG', { sha256: 'a'.repeat(64), modified: '2026-02-01' })];
 function harness(overrides = {}) {
   let saved = null;
   const calls = [], savedFiles = [], removed = [], history = new Map(), items = new Map();
@@ -25,6 +27,53 @@ function harness(overrides = {}) {
   });
   return { runner, calls, savedFiles, removed, history, items, saved: () => saved };
 }
+
+test('default downloads distinct identical source entries, but never repeats saved downloads', async () => {
+  const h = harness({ resource: async () => dir('Album', duplicatePhotos()) });
+  for (let n = 0; n < 2; n++) {
+    await h.runner.command('scan', { link: 'https://disk.yandex.ru/d/test' }); await h.runner.waitUntilIdle();
+    assert.equal(h.savedFiles.length, 2);
+  }
+  assert.equal(h.saved().deduplicate, false);
+  assert.equal(h.saved().files.filter(f => f.reused).length, 2);
+});
+
+test('optional SHA256 dedup reuses same-folder contents despite different names and dates; disabling it fills missing entries', async () => {
+  const h = harness({ resource: async () => dir('Album', duplicatePhotos()) });
+  await h.runner.command('scan', { link: 'https://disk.yandex.ru/d/test', deduplicate: true }); await h.runner.waitUntilIdle();
+  assert.equal(h.savedFiles.length, 1);
+  assert.equal(h.saved().files.filter(f => f.reused).length, 1);
+  // Simulate browser restart: recovery must not turn the alias into an own-file receipt.
+  const recovered = createRunner({ loadJob: async () => h.saved(), saveJob: async () => {},
+    loadHistory: async key => structuredClone(h.history.get(key) || {}),
+    saveHistory: async (key, value) => h.history.set(key, structuredClone(value)), downloads: {} });
+  await recovered.ready;
+  await h.runner.command('scan', { link: 'https://disk.yandex.ru/d/test', deduplicate: false }); await h.runner.waitUntilIdle();
+  assert.equal(h.savedFiles.length, 2);
+  assert.match(h.savedFiles[1].filename, /a \(1\)\.JPG$/);
+  await h.runner.command('scan', { link: 'https://disk.yandex.ru/d/test' }); await h.runner.waitUntilIdle();
+  assert.equal(h.savedFiles.length, 2);
+});
+
+test('optional dedup never merges different directories or files lacking a reliable checksum', async () => {
+  const h = harness({ resource: async (_job, path) => path === '/' ? dir('Album', [
+    photo('/a.JPG'), photo('/b.JPG'), photo('/hashed.JPG', { sha256: 'a'.repeat(64) }),
+    { type: 'dir', name: 'Sub', path: '/Sub' }
+  ]) : dir('Sub', [photo('/Sub/hashed.JPG', { sha256: 'a'.repeat(64) })]) });
+  await h.runner.command('scan', { link: 'https://disk.yandex.ru/d/test', deduplicate: true }); await h.runner.waitUntilIdle();
+  assert.equal(h.savedFiles.length, 4);
+});
+
+test('optional dedup does not reuse a removed file and can upgrade a shared preview', async () => {
+  const h = harness({ resource: async () => dir('Album', duplicatePhotos()) });
+  await h.runner.command('scan', { link: 'https://disk.yandex.ru/d/test', deduplicate: true, mode: 'preview' }); await h.runner.waitUntilIdle();
+  assert.equal(h.savedFiles.length, 1);
+  await h.runner.command('scan', { link: 'https://disk.yandex.ru/d/test', deduplicate: true }); await h.runner.waitUntilIdle();
+  assert.equal(h.savedFiles.length, 2); assert.deepEqual(h.removed, [1]);
+  h.items.get(2).exists = false;
+  await h.runner.command('scan', { link: 'https://disk.yandex.ru/d/test', deduplicate: true }); await h.runner.waitUntilIdle();
+  assert.equal(h.savedFiles.length, 3);
+});
 
 test('nested URL preserves root album and every parent, paginates and recurses without popup polling', async () => {
   const calls = [];

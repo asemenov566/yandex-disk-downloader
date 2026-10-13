@@ -20,7 +20,7 @@ while (job.directories.some(dir => dir.state === 'pending')) {
   consumePage(job, dir, page);
 }
 console.log(JSON.stringify({ stage: 'scanned', ...summary(job) }));
-for (const file of job.files.filter(file => file.state === 'pending')) {
+for (const file of job.files.filter(file => file.state === 'pending' && file.kind === 'photo')) {
   try {
     const blob = await getPhoto(job, file, 'preview', signal);
     const output = path.resolve(destination, outputPath(job, file, 'preview', blob.type));

@@ -1,16 +1,34 @@
 import { newJob, summary, report, outputPath, consumePage } from './core.js';
 
 export function createRunner({ loadJob, saveJob, resource, getPhoto, getOriginalUrl, downloads,
-  loadHistory = async () => ({}), saveHistory = async () => {},
+  loadHistory = async () => ({}), saveHistory = async () => {}, withFileLock = async (_key, work) => work(),
   sleep = ms => new Promise(resolve => setTimeout(resolve, ms)), now = () => Date.now() }) {
   let job = null, running = false, controller, current = '', notice = '', stopping = false;
   let runPromise = Promise.resolve();
   const checkpoint = () => saveJob(job);
   const key = file => JSON.stringify([job.publicUrl, file.path]);
+  const contentKey = file => /^[a-f0-9]{64}$/i.test(file.sha256 || '') ? JSON.stringify(['content',
+    (job.folder + '/' + file.local.split('/').slice(0, -1).join('/')).normalize('NFC').toLowerCase(), file.sha256.toLowerCase()]) : null;
+  async function known(file) {
+    const primary = await loadHistory(key(file)) || {};
+    if (!job.deduplicate || !contentKey(file)) return primary;
+    const shared = await loadHistory(contentKey(file)) || {};
+    return {
+      original: await existing(primary.original, file) ? primary.original : shared.original,
+      preview: await existing(primary.preview, file) ? primary.preview : shared.preview
+    };
+  }
+  async function persistHistory(file, history) {
+    // Content aliases must not masquerade as a downloaded source entry when the
+    // user later turns content deduplication off. Keep receipts for their owner.
+    const own = Object.fromEntries(Object.entries(history).filter(([, record]) => record && (!record.sourceKey || record.sourceKey === key(file))));
+    await saveHistory(key(file), own);
+    if (contentKey(file)) await saveHistory(contentKey(file), history);
+  }
   function snapshot() {
     return { running, current, notice, job: job ? {
       title: job.title, folder: job.folder, phase: job.phase, pages: job.pages, mode: job.mode,
-      publicUrl: job.publicUrl, path: job.path, usePreviews: job.usePreviews, summary: summary(job),
+      publicUrl: job.publicUrl, path: job.path, deduplicate: !!job.deduplicate, usePreviews: job.usePreviews, summary: summary(job),
       pendingDirectories: job.directories.filter(d => d.state === 'pending').length,
       issues: [...job.directories.filter(d => d.state === 'failed'),
         ...job.files.filter(f => ['failed', 'skipped'].includes(f.state) || f.cleanupError)]
@@ -52,9 +70,9 @@ export function createRunner({ loadJob, saveJob, resource, getPhoto, getOriginal
     job.phase = 'ready'; await checkpoint();
   }
   function sameSource(record, file) {
-    return Number.isFinite(file.size) && record.size === file.size &&
-      (!file.sha256 || record.sha256 === file.sha256) &&
-      (!file.modified || record.modified === file.modified);
+    if (!Number.isFinite(file.size) || record.size !== file.size) return false;
+    if (file.sha256) return record.sha256?.toLowerCase() === file.sha256.toLowerCase();
+    return !file.modified || record.modified === file.modified;
   }
   async function existing(record, file) {
     if (!record || !sameSource(record, file)) return null;
@@ -64,10 +82,12 @@ export function createRunner({ loadJob, saveJob, resource, getPhoto, getOriginal
   }
   function recordOf(file) {
     return { downloadId: file.downloadId, savedPath: file.savedPath, savedBytes: file.savedBytes,
-      savedKind: file.savedKind, size: file.size, sha256: file.sha256, modified: file.modified };
+      savedKind: file.savedKind, size: file.size, sha256: file.sha256, modified: file.modified,
+      sourceKey: file.receiptSourceKey || key(file) };
   }
   function reuse(file, record, reason = '') {
-    Object.assign(file, record, { state: 'done', reused: true, reason });
+    Object.assign(file, { downloadId: record.downloadId, savedPath: record.savedPath, savedBytes: record.savedBytes,
+      savedKind: record.savedKind, receiptSourceKey: record.sourceKey || key(file), state: 'done', reused: true, reason });
   }
   async function removeOldPreview(file, history) {
     if (!history.original || !history.preview || history.original.downloadId === history.preview.downloadId) return;
@@ -75,21 +95,21 @@ export function createRunner({ loadJob, saveJob, resource, getPhoto, getOriginal
     if (!await existing(history.original, file)) return;
     const [old] = await downloads.search({ id: history.preview.downloadId });
     if (!old || old.exists === false) {
-      delete history.preview; await saveHistory(key(file), history); return;
+      delete history.preview; await persistHistory(file, history); return;
     }
     if (old.state !== 'complete' || old.filename !== history.preview.savedPath ||
         old.fileSize !== history.preview.savedBytes || !/\.preview\.(jpg|png|webp|gif)$/i.test(old.filename)) return;
     try {
       await downloads.removeFile(history.preview.downloadId);
       delete history.preview; delete file.cleanupError;
-      await saveHistory(key(file), history);
+      await persistHistory(file, history);
     } catch (error) { file.cleanupError = 'Оригинал сохранён, но превью осталось: ' + error.message; }
   }
   async function remember(file) {
-    const history = await loadHistory(key(file)) || {};
+    const history = await known(file);
     history[file.savedKind] = recordOf(file);
     // Persist original before deleting anything, so interruption never loses the receipt.
-    await saveHistory(key(file), history);
+    await persistHistory(file, history);
     if (file.savedKind === 'original') await removeOldPreview(file, history);
   }
   async function saveDownload(source, file, kind, signal, direct = false) {
@@ -99,7 +119,7 @@ export function createRunner({ loadJob, saveJob, resource, getPhoto, getOriginal
     try {
       file.savedKind = kind; file.savedBytes = direct ? file.size : source.size;
       file.savedPath = outputPath(job, file, kind, direct ? file.mime || '' : source.type);
-      file.state = 'active'; file.reused = false;
+      file.state = 'active'; file.reused = false; file.receiptSourceKey = key(file);
       file.downloadId = await downloads.download({ url, filename: file.savedPath, saveAs: false, conflictAction: 'uniquify' });
       await checkpoint();
       let lastBytes = 0, lastData = now();
@@ -131,9 +151,10 @@ export function createRunner({ loadJob, saveJob, resource, getPhoto, getOriginal
     }
   }
   async function downloadOne(file, signal) {
-    const history = await loadHistory(key(file)) || {};
+    const history = await known(file);
     if (await existing(history.original, file)) {
       reuse(file, history.original, 'Уже сохранён полный файл');
+      await persistHistory(file, history);
       await removeOldPreview(file, history); return;
     }
     const preview = await existing(history.preview, file) ? history.preview : null;
@@ -168,7 +189,10 @@ export function createRunner({ loadJob, saveJob, resource, getPhoto, getOriginal
     job.phase = 'downloading'; await checkpoint();
     for (const file of job.files.filter(f => f.state === 'pending')) {
       signal.throwIfAborted(); current = file.name;
-      try { await downloadOne(file, signal); }
+      try {
+        const lockKey = job.deduplicate && contentKey(file) || key(file);
+        await withFileLock(lockKey, async () => { signal.throwIfAborted(); await downloadOne(file, signal); });
+      }
       catch (error) {
         if (signal.aborted || error.status === 429) {
           if (file.state !== 'done') { file.state = 'pending'; delete file.downloadId; }
@@ -202,7 +226,8 @@ export function createRunner({ loadJob, saveJob, resource, getPhoto, getOriginal
       }
       if (file.state === 'done' && Number.isInteger(file.downloadId) && file.savedKind) {
         const history = await loadHistory(key(file)) || {};
-        if (!history[file.savedKind]) { history[file.savedKind] = recordOf(file); await saveHistory(key(file), history); }
+        if (!history[file.savedKind]) history[file.savedKind] = recordOf(file);
+        await persistHistory(file, history);
       }
     }
     await checkpoint();
@@ -219,7 +244,7 @@ export function createRunner({ loadJob, saveJob, resource, getPhoto, getOriginal
     }
     if (running) throw new Error('Это задание уже выполняется.');
     if (action === 'scan') {
-      const next = newJob(args.link, args.mode);
+      const next = newJob(args.link, args.mode, { deduplicate: args.deduplicate });
       if (job && job.phase !== 'stopped' && (summary(job).pending || job.directories.some(d => d.state === 'pending')) && !args.replace) {
         throw new Error('Есть незавершённая очередь.');
       }

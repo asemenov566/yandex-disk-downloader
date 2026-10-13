@@ -1,17 +1,19 @@
 <!doctype html>
 <html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Загрузчик Яндекс Диска</title><link rel="stylesheet" href="app.css"></head>
 <body><main>
-<header><img class="mark" src="icons/icon-128.png" width="40" height="40" alt=""><div><h1>Загрузчик Яндекс Диска</h1><p>Файлы и папки из нескольких альбомов</p></div><span class="version">1.2</span></header>
+<header><img class="mark" src="icons/icon-128.png" width="40" height="40" alt=""><div><h1>Загрузчик Яндекс Диска</h1><p>Файлы и папки из нескольких альбомов</p></div><span class="version">1.2.1</span></header>
 <section class="card">
 <label for="link">Публичная ссылка на альбом или папку</label>
 <div class="input-row"><input id="link" type="url" placeholder="https://disk.yandex.ru/d/…" autocomplete="off"><button id="scan">Скачать всё</button></div>
 <div class="destination"><b>Сохраняем в</b><p id="destination">Загрузки / yandex-disk / название альбома</p></div>
-<label for="mode" class="sr-only">Качество фотографий</label>
-<select id="mode"><option value="auto">Фото: оригинал → копия, если недоступен</option><option value="original">Только оригиналы всех файлов</option><option value="preview">Фото: копии для просмотра; остальные файлы: оригиналы</option></select>
+<label for="mode" class="sr-only">Режим скачивания</label>
+<select id="mode"><option value="auto">Оригиналы с заменой недоступных фото копиями</option><option value="original">Только оригиналы</option></select>
+<label class="check-row" title="Если на Яндекс Диске есть два одинаковых файла, при установленном флажке будут скачаны оба. Снимите флажок, чтобы сохранять одну копию одинаковых файлов внутри каждой папки. Уже скачанный файл повторно не загружается в любом случае."><input type="checkbox" id="download-all" checked aria-describedby="duplicates-hint">Скачивать все без проверки дублей</label>
+<span id="duplicates-hint" class="sr-only">Если на Яндекс Диске есть два одинаковых файла, при установленном флажке будут скачаны оба. Снимите флажок, чтобы сохранять одну копию одинаковых файлов внутри каждой папки. Уже скачанный файл повторно не загружается в любом случае.</span>
 <details class="hint"><summary>Качество и структура папок</summary><p>Все страницы и подпапки учитываются. Видео и документы скачиваются в оригинале. При новом запуске проверяем сохранённое и пробуем заменить превью оригиналом.</p></details>
 </section>
 <section class="card queue-card" id="queue-card" hidden><label for="jobs">Задания · независимые загрузки</label><select id="jobs" aria-label="Выбрать задание"></select></section><section class="card" aria-live="polite">
-<div class="status-head"><div><p class="eyebrow" id="phase">Готово к работе</p><h2 id="album">Укажите ссылку</h2></div><span class="badge" id="quality">Фото</span></div>
+<div class="status-head"><div><p class="eyebrow" id="phase">Готово к работе</p><h2 id="album">Укажите ссылку</h2></div><span class="badge" id="quality">Авто</span></div>
 <div class="metrics"><div><strong id="total">0</strong><span>найдено файлов</span></div><div><strong id="done">0</strong><span>сохранено</span></div><div><strong id="skipped">0</strong><span>пропущено</span></div><div><strong id="failed">0</strong><span>ошибок</span></div></div>
 <progress id="progress" value="0" max="1"></progress>
 <p id="detail" class="hint">Список будет прочитан полностью, включая вложенные папки.</p>

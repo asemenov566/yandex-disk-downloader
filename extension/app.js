@@ -11,6 +11,7 @@ function render() {
   $('scan').disabled = pending;
   $('link').disabled = pending;
   $('mode').disabled = pending;
+  $('download-all').disabled = pending;
   $('pause').disabled = pending || (!running && !state.queued);
   $('stop').disabled = pending || !job || job.phase === 'stopped' || (job.phase === 'done' && !running);
   $('start').disabled = running || state.queued || pending || !job || job.phase === 'stopped' || (!s.pending && !job.pendingDirectories);
@@ -58,7 +59,7 @@ async function poll() {
   catch (error) { $('message').textContent = error.message; }
   if (!closed) timer = setTimeout(poll, state.jobs.some(j => j.running || j.queued) ? 800 : 1500);
 }
-$('scan').addEventListener('click', () => act('scan', { link: $('link').value, mode: $('mode').value }));
+$('scan').addEventListener('click', () => act('scan', { link: $('link').value, mode: $('mode').value, deduplicate: !$('download-all').checked }));
 $('start').addEventListener('click', () => act('start'));
 $('pause').addEventListener('click', () => act('pause'));
 $('stop').addEventListener('click', () => act('stop'));
@@ -68,7 +69,8 @@ $('jobs').addEventListener('change', async () => {
   await act('status', { id: $('jobs').value });
   if (state.job) {
     $('link').value = state.job.publicUrl + (state.job.path === '/' ? '' : state.job.path);
-    $('mode').value = state.job.mode;
+    $('mode').value = state.job.mode === 'original' ? 'original' : 'auto';
+    $('download-all').checked = !state.job.deduplicate;
   }
 });
 window.addEventListener('pagehide', () => { closed = true; clearTimeout(timer); });
@@ -78,7 +80,10 @@ try {
   state = await request('status', { link: currentUrl });
   const oldUrl = state.job ? state.job.publicUrl + (state.job.path === '/' ? '' : state.job.path) : '';
   $('link').value = /^https:\/\/(disk\.yandex\.(ru|com)|yadi\.sk)\/(d|i)\//.test(currentUrl) ? currentUrl : oldUrl;
-  if (state.job) $('mode').value = state.job.mode;
+  if (state.job && $('link').value === oldUrl) {
+    $('mode').value = state.job.mode === 'original' ? 'original' : 'auto';
+    $('download-all').checked = !state.job.deduplicate;
+  }
 } catch (error) { state.notice = error.message; }
 render();
 timer = setTimeout(poll, 700);

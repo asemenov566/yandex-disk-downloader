@@ -3,9 +3,19 @@ import { newJob, parseLink } from './core.js';
 
 export function createQueue({ loadEntries, saveEntry, deleteEntry = async () => {}, concurrency = Infinity, ...dependencies }) {
   const entries = [], runners = new Map(), active = new Set();
+  const locks = new Map();
+  async function withFileLock(key, work) {
+    const previous = locks.get(key) || Promise.resolve();
+    let release;
+    const lock = new Promise(resolve => { release = resolve; });
+    locks.set(key, lock);
+    await previous;
+    try { return await work(); }
+    finally { release(); if (locks.get(key) === lock) locks.delete(key); }
+  }
   let serial = Promise.resolve(), scheduling = Promise.resolve();
   const runnerFor = entry => {
-    if (!runners.has(entry.id)) runners.set(entry.id, createRunner({ ...dependencies,
+    if (!runners.has(entry.id)) runners.set(entry.id, createRunner({ ...dependencies, withFileLock,
       loadJob: async () => entry.job,
       saveJob: async job => { entry.job = job; await saveEntry(entry); }
     }));
@@ -75,7 +85,7 @@ export function createQueue({ loadEntries, saveEntry, deleteEntry = async () => 
     await ready;
     if (action === 'status') return snapshot(args.id, args.link);
     if (action === 'scan') {
-      const job = newJob(args.link, args.mode);
+      const job = newJob(args.link, args.mode, { deduplicate: args.deduplicate });
       let entry = entries.find(e => (e.wanted || active.has(e.id)) && e.job.publicUrl === job.publicUrl && e.job.path === job.path);
       if (!entry) {
         entry = entries.find(e => e.job.publicUrl === job.publicUrl && e.job.path === job.path);

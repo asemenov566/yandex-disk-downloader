@@ -36,9 +36,9 @@ export function classify(resource) {
   return 'other';
 }
 
-export function newJob(link, mode = 'auto') {
+export function newJob(link, mode = 'auto', { deduplicate = false } = {}) {
   if (!['auto', 'original', 'preview'].includes(mode)) throw new Error('Неизвестный режим качества.');
-  return { ...parseLink(link), version: 2, mode, title: '', folder: '', phase: 'scanning', pages: 0,
+  return { ...parseLink(link), version: 2, mode, deduplicate: !!deduplicate, title: '', folder: '', phase: 'scanning', pages: 0,
     directories: [{ path: parseLink(link).path, local: '', offset: 0, state: 'pending', root: true }],
     files: [], usedPaths: {}, originalFailures: 0, usePreviews: mode === 'preview', created: new Date().toISOString() };
 }
