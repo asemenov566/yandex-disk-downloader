@@ -167,6 +167,55 @@ test('retry recovers unread directory and keeps already saved photos', async () 
   assert.equal((await h.runner.command('status')).job.summary.directoriesFailed, 0);
 });
 
+test('retry includes previews only when requested, without rescanning or repeating originals', async () => {
+  let available = false, scans = 0;
+  const attempts = [];
+  const h = harness({
+    resource: async () => { scans++; return dir('Album', [photo('/original.JPG'), photo('/copy.JPG'), photo('/error.JPG')]); },
+    getPhoto: async (_job, file, kind) => {
+      attempts.push([file.name, kind]);
+      if (!available && (file.name === 'error.JPG' || (file.name === 'copy.JPG' && kind === 'original'))) throw new Error('Unavailable');
+      return new Blob(['abc'], { type: 'image/jpeg' });
+    }
+  });
+  await h.runner.command('scan', { link: 'https://disk.yandex.ru/d/test' }); await h.runner.waitUntilIdle();
+  attempts.length = 0; available = true;
+  await h.runner.command('retry'); await h.runner.waitUntilIdle();
+  assert.deepEqual(attempts, [['error.JPG', 'original']]);
+  attempts.length = 0;
+  await h.runner.command('retry', { includePreviews: true }); await h.runner.waitUntilIdle();
+  assert.deepEqual(attempts, [['copy.JPG', 'original']]);
+  assert.equal(scans, 1);
+  assert.deepEqual(h.removed, [2]);
+  assert.equal((await h.runner.command('status')).job.summary.originals, 3);
+  await h.runner.command('retry', { includePreviews: true }); await h.runner.waitUntilIdle();
+  assert.equal(attempts.length, 1);
+});
+
+for (const mode of ['auto', 'preview']) test(`preview retry preserves unavailable copies and retries every original in ${mode} mode`, async () => {
+  let available = false;
+  const attempts = [];
+  const h = harness({
+    resource: async () => dir('Album', [1, 2, 3, 4].map(n => photo('/' + n + '.JPG'))),
+    getPhoto: async (_job, file, kind) => {
+      attempts.push([file.name, kind]);
+      if (!available && kind === 'original') throw new Error('Unavailable');
+      return new Blob(['abc'], { type: 'image/jpeg' });
+    }
+  });
+  await h.runner.command('scan', { link: 'https://disk.yandex.ru/d/test', mode }); await h.runner.waitUntilIdle();
+  attempts.length = 0;
+  await h.runner.command('retry', { includePreviews: true }); await h.runner.waitUntilIdle();
+  assert.equal(attempts.length, 4);
+  assert(attempts.every(([, kind]) => kind === 'original'));
+  assert.equal(h.savedFiles.length, 4); assert.deepEqual(h.removed, []);
+  assert.equal((await h.runner.command('status')).job.summary.previews, 4);
+  available = true;
+  await h.runner.command('retry', { includePreviews: true }); await h.runner.waitUntilIdle();
+  assert.equal((await h.runner.command('status')).job.summary.originals, 4);
+  assert.equal(h.removed.length, 4);
+});
+
 test('restart reconciles saved Chrome download without re-downloading', async () => {
   const job = newJob('https://disk.yandex.ru/d/test');
   job.files = [{ path: '/a.JPG', name: 'a.JPG', kind: 'photo', state: 'active', downloadId: 7, savedBytes: 3 }];

@@ -23,6 +23,20 @@ function setup(concurrency) {
   });
   return { queue, entered, gates, saved, files };
 }
+test('queued retry keeps preview option until a worker becomes available', async () => {
+  const h = setup(1);
+  const a = await h.queue.command('scan', { link: 'https://disk.yandex.ru/d/a', mode: 'preview' });
+  await until(() => h.gates.length === 1); h.gates[0](); await h.queue.waitUntilIdle();
+  await h.queue.command('scan', { link: 'https://disk.yandex.ru/d/b' });
+  await until(() => h.gates.length === 2);
+  const queued = await h.queue.command('retry', { id: a.id, includePreviews: true });
+  assert.equal(queued.queued, true);
+  h.gates[1](); await until(() => h.gates.length === 3);
+  h.gates[2](); await h.queue.waitUntilIdle();
+  assert.equal((await h.queue.command('status', { id: a.id })).job.summary.originals, 1);
+  assert.equal(h.files.length, 3);
+});
+
 test('two independent albums run concurrently; third waits; stopped queue does not start', async () => {
   const h = setup(2);
   const a = await h.queue.command('scan', { link: 'https://disk.yandex.ru/d/a' });

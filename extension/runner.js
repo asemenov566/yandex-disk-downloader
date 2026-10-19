@@ -173,7 +173,7 @@ export function createRunner({ loadJob, saveJob, resource, getPhoto, getOriginal
     }
     const preview = await existing(history.preview, file) ? history.preview : null;
     // Revisit originals for existing previews on every fresh scan, even after prior failures.
-    let kind = file.kind === 'photo' && (job.mode === 'preview' || (job.usePreviews && !preview)) ? 'preview' : 'original';
+    let kind = !file.retryOriginal && file.kind === 'photo' && (job.mode === 'preview' || (job.usePreviews && !preview)) ? 'preview' : 'original';
     if (kind === 'preview' && preview) { reuse(file, preview, 'Копия уже сохранена'); return; }
     if (file.kind !== 'photo' && getOriginalUrl) {
       current = file.name + ' · получаем ссылку (до 20 с)';
@@ -187,7 +187,7 @@ export function createRunner({ loadJob, saveJob, resource, getPhoto, getOriginal
         if (kind === 'original' && file.kind === 'photo') job.originalFailures = 0;
       } catch (error) {
         signal.throwIfAborted();
-        if (error.status === 429 || kind !== 'original' || job.mode !== 'auto' || file.kind !== 'photo') throw error;
+        if (error.status === 429 || kind !== 'original' || (job.mode !== 'auto' && !file.retryOriginal) || file.kind !== 'photo') throw error;
         file.originalError = error.message; job.originalFailures++;
         if (job.originalFailures >= 3) job.usePreviews = true;
         if (preview) { reuse(file, preview, 'Оригинал пока недоступен: ' + error.message); return; }
@@ -212,6 +212,7 @@ export function createRunner({ loadJob, saveJob, resource, getPhoto, getOriginal
       try {
         const lockKey = job.deduplicate && contentKey(file) || key(file);
         await withFileLock(lockKey, async () => { signal.throwIfAborted(); await downloadOne(file, signal); }, signal);
+        delete file.retryOriginal;
       }
       catch (error) {
         if (signal.aborted || error.status === 429) {
@@ -274,6 +275,12 @@ export function createRunner({ loadJob, saveJob, resource, getPhoto, getOriginal
       if (job.phase === 'stopped') throw new Error('Задание остановлено. Нажмите «Скачать всё», чтобы проверить папку заново.');
       launch(async signal => {
         if (action === 'retry') {
+          // Keep this intent on the file so pause/restart still attempts its original.
+          if (args.includePreviews === true) {
+            for (const f of job.files.filter(f => f.state === 'done' && f.savedKind === 'preview')) {
+              f.retryOriginal = true; f.state = 'pending'; f.reason = '';
+            }
+          }
           for (const f of job.files.filter(f => f.state === 'failed')) { f.state = 'pending'; f.reason = ''; delete f.downloadId; }
           for (const d of job.directories.filter(d => d.state === 'failed')) { d.state = 'pending'; d.reason = ''; }
         }

@@ -56,7 +56,7 @@ export function createQueue({ loadEntries, saveEntry, deleteEntry = async () => 
         if (entries.some(other => active.has(other.id) && overlaps(entry.job, other.job))) continue;
         const runner = runnerFor(entry);
         active.add(entry.id);
-        try { await runner.command(entry.action || 'start'); }
+        try { await runner.command(entry.action || 'start', entry.actionArgs || {}); }
         catch (error) { active.delete(entry.id); entry.wanted = false; entry.error = error.message; await saveEntry(entry); continue; }
         runner.waitUntilIdle().then(async () => {
           active.delete(entry.id); entry.wanted = false; await saveEntry(entry); await kick();
@@ -114,7 +114,10 @@ export function createQueue({ loadEntries, saveEntry, deleteEntry = async () => 
       await runnerFor(entry).command(action);
     } else if (action === 'start' || action === 'retry') {
       if (entry.job.phase === 'stopped') throw new Error('Нажмите «Скачать всё», чтобы проверить папку заново.');
-      if (!active.has(entry.id)) { entry.wanted = true; entry.action = action; }
+      if (!active.has(entry.id)) {
+        entry.wanted = true; entry.action = action;
+        entry.actionArgs = action === 'retry' ? { includePreviews: args.includePreviews === true } : {};
+      }
     } else if (action === 'report') await runnerFor(entry).command(action);
     else throw new Error('Неизвестная команда.');
     await saveEntry(entry); await kick(); return snapshot(entry.id, undefined, args.allIssues);

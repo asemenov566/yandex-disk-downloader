@@ -22,7 +22,8 @@ function render() {
   $('pause').disabled = pending || (!running && !state.queued);
   $('stop').disabled = pending || !job || job.phase === 'stopped' || (job.phase === 'done' && !running);
   $('start').disabled = running || state.queued || pending || !job || job.phase === 'stopped' || (!s.pending && !job.pendingDirectories);
-  $('retry').disabled = running || state.queued || pending || !job || job.phase === 'stopped' || (!s.failed && !s.directoriesFailed);
+  $('retry').disabled = running || state.queued || pending || !job || job.phase === 'stopped' || (!s.failed && !s.directoriesFailed && !($('retry-previews').checked && s.previews));
+  $('retry-previews').disabled = running || state.queued || pending;
   $('report').disabled = running || pending || !job?.folder;
   $('current').textContent = state.current || '';
   $('message').textContent = state.notice || '';
@@ -121,7 +122,8 @@ $('scan').addEventListener('click', () => act('scan', { link: $('link').value, m
 $('start').addEventListener('click', () => act('start'));
 $('pause').addEventListener('click', () => act('pause'));
 $('stop').addEventListener('click', () => act('stop'));
-$('retry').addEventListener('click', () => act('retry'));
+$('retry').addEventListener('click', () => act('retry', { includePreviews: $('retry-previews').checked }));
+$('retry-previews').addEventListener('change', render);
 $('report').addEventListener('click', () => act('report'));
 $('open-window').addEventListener('click', () => openView('window'));
 $('open-tab').addEventListener('click', () => openView('tab'));

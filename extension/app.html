@@ -1,7 +1,7 @@
 <!doctype html>
 <html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Загрузчик Яндекс Диска</title><link rel="stylesheet" href="app.css"></head>
 <body><main>
-<header><img class="mark" src="icons/icon-128.png" width="40" height="40" alt=""><div class="brand"><h1>Загрузчик Яндекс Диска</h1><p>Файлы и папки из нескольких альбомов</p></div><div class="header-tools"><nav class="window-actions" aria-label="Открыть расширение отдельно"><button id="open-window" class="secondary">Открыть окно</button><button id="open-tab" class="secondary">Открыть вкладку</button></nav><span class="version">1.2.3</span></div></header>
+<header><img class="mark" src="icons/icon-128.png" width="40" height="40" alt=""><div class="brand"><h1>Загрузчик Яндекс Диска</h1><p>Файлы и папки из нескольких альбомов</p></div><div class="header-tools"><nav class="window-actions" aria-label="Открыть расширение отдельно"><button id="open-window" class="secondary">Открыть окно</button><button id="open-tab" class="secondary">Открыть вкладку</button></nav><span class="version">1.2.4</span></div></header>
 <details class="card overall-card" id="overall-card" hidden>
 <summary><span class="overall-heading">Общий прогресс<span id="overall-caption">Все задания</span></span><span class="badge" id="overall-percent">0%</span></summary>
 <div class="overall-body" aria-live="polite">
@@ -29,7 +29,7 @@
 <progress id="progress" value="0" max="1"></progress>
 <p id="detail" class="hint">Список будет прочитан полностью, включая вложенные папки.</p>
 <p id="current" class="current"></p>
-<div class="actions"><button id="start" disabled>Продолжить</button><button id="pause" class="secondary" disabled>Пауза</button><button id="stop" class="secondary" disabled>Стоп</button><button id="retry" class="secondary" disabled>Повторить ошибки</button><button id="report" class="text-button" disabled>Отчёт</button></div>
+<div class="actions"><button id="start" disabled>Продолжить</button><button id="pause" class="secondary" disabled>Пауза</button><button id="stop" class="secondary" disabled>Стоп</button><span class="retry-controls"><button id="retry" class="secondary" disabled>Повторить ошибки</button><label class="check-row" title="Только при повторе ошибок: попробовать оригиналы для уже найденных preview без повторного обхода альбома."><input type="checkbox" id="retry-previews">Считать preview ошибкой</label></span><button id="report" class="text-button" disabled>Отчёт</button></div>
 <p id="message" class="message" role="status"></p>
 </section>
 <details class="card issues" id="issues-card" hidden><summary>Пропуски и ошибки</summary><ul id="issues"></ul></details>
