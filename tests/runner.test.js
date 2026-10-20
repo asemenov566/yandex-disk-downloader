@@ -33,9 +33,68 @@ test('default downloads distinct identical source entries, but never repeats sav
   for (let n = 0; n < 2; n++) {
     await h.runner.command('scan', { link: 'https://disk.yandex.ru/d/test' }); await h.runner.waitUntilIdle();
     assert.equal(h.savedFiles.length, 2);
+    assert.equal((await h.runner.command('status')).job.summary.newFiles, n === 0 ? 2 : 0);
   }
   assert.equal(h.saved().deduplicate, false);
   assert.equal(h.saved().files.filter(f => f.reused).length, 2);
+});
+
+test('new-file counter excludes existing originals, previews, skips and failed writes; retries reset it', async () => {
+  const originals = new Set(['/existing.JPG']), previews = new Set(['/old-preview.JPG']);
+  let allAvailable = false;
+  const items = ['existing.JPG', 'old-preview.JPG', 'new.JPG', 'new-preview.JPG', 'failed.JPG', 'empty.JPG'];
+  const h = harness({
+    resource: async () => dir('Album', items.map(name => photo('/' + name, { size: name === 'empty.JPG' ? 0 : 3 }))),
+    findLocal: async (_job, file) => ({ original: originals.has(file.path) ? { savedKind: 'original', savedBytes: 3, localFile: true } : null,
+      preview: previews.has(file.path) ? { savedKind: 'preview', savedBytes: 3, localFile: true } : null }),
+    getPhoto: async (_job, file, kind) => {
+      if (!allAvailable && kind === 'original' && file.name.includes('preview')) throw new Error('Original unavailable');
+      return new Blob(['abc'], { type: 'image/jpeg' });
+    },
+    saveLocal: async (path, _source, options) => {
+      if (!allAvailable && path.endsWith('/failed.JPG')) throw new Error('Write failed');
+      const preview = path.includes('.preview.');
+      (preview ? previews : originals).add('/' + path.split('/').at(-1).replace('.preview.jpg', '.JPG'));
+      return { savedPath: path, savedBytes: options.expectedSize, localFile: true };
+    }
+  });
+  await h.runner.command('scan', { link: 'https://disk.yandex.ru/d/test' }); await h.runner.waitUntilIdle();
+  let s = (await h.runner.command('status')).job.summary;
+  assert.equal(s.newFiles, 2); assert.equal(s.failed, 1); assert.equal(s.skipped, 1); assert.equal(s.reused, 2);
+  allAvailable = true;
+  await h.runner.command('retry', { includePreviews: true }); await h.runner.waitUntilIdle();
+  s = (await h.runner.command('status')).job.summary;
+  assert.equal(s.newFiles, 3); assert.equal(s.failed, 0); assert.equal(s.previews, 0);
+  await h.runner.command('retry', { includePreviews: true }); await h.runner.waitUntilIdle();
+  assert.equal((await h.runner.command('status')).job.summary.newFiles, 0);
+  await h.runner.command('scan', { link: 'https://disk.yandex.ru/d/test' }); await h.runner.waitUntilIdle();
+  assert.equal((await h.runner.command('status')).job.summary.newFiles, 0);
+});
+
+test('new-file counter survives pause and reload, then continues in the same run', async () => {
+  let saved, blocked = false, blockSecond = true;
+  const deps = {
+    loadJob: async () => saved && structuredClone(saved), saveJob: async job => { saved = structuredClone(job); },
+    resource: async () => dir('Album', [photo('/first.JPG'), photo('/second.JPG')]),
+    getPhoto: async (_job, file, _kind, signal) => {
+      if (file.name === 'second.JPG' && blockSecond) {
+        blocked = true;
+        await new Promise((resolve, reject) => signal.addEventListener('abort', () => reject(signal.reason), { once: true }));
+      }
+      return new Blob(['abc'], { type: 'image/jpeg' });
+    },
+    saveLocal: async (path, _source, options) => ({ savedPath: path, savedBytes: options.expectedSize, localFile: true })
+  };
+  const runner = createRunner(deps);
+  await runner.command('scan', { link: 'https://disk.yandex.ru/d/test' });
+  for (let n = 0; n < 100 && !blocked; n++) await new Promise(resolve => setTimeout(resolve, 0));
+  assert(blocked); assert.equal((await runner.command('status')).job.summary.newFiles, 1);
+  await runner.command('pause'); await runner.waitUntilIdle();
+  blockSecond = false;
+  const restored = createRunner(deps); await restored.ready;
+  assert.equal((await restored.command('status')).job.summary.newFiles, 1);
+  await restored.command('start'); await restored.waitUntilIdle();
+  assert.equal((await restored.command('status')).job.summary.newFiles, 2);
 });
 
 test('optional SHA256 dedup reuses same-folder contents despite different names and dates; disabling it fills missing entries', async () => {
@@ -319,7 +378,7 @@ test('native download without bytes times out after 25 seconds and is cancelled'
   });
   await h.runner.command('scan', { link: 'https://disk.yandex.ru/d/test' }); await h.runner.waitUntilIdle();
   assert(cancelled); assert(time >= 25000 && time < 26000);
-  assert.equal(h.saved().files[0].state, 'failed'); assert.match(h.saved().files[0].reason, /25 секунд/);
+  assert.equal(h.saved().files[0].state, 'failed'); assert.match(h.saved().files[0].reason, /25 с\./);
 });
 
 test('photos from every nested folder precede videos and documents, including a restored queue', async () => {

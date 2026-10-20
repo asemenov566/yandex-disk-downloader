@@ -22,7 +22,7 @@ export async function apiRequest(suffix, params, signal) {
   return response.json();
 }
 
-export async function getPhoto(job, file, kind, signal, onProgress = () => {}) {
+export async function getPhoto(job, file, kind, signal, onProgress = () => {}, timeoutMs = 25000) {
   let url;
   if (kind === 'original') {
     url = await originalUrl(job, file, signal);
@@ -33,7 +33,7 @@ export async function getPhoto(job, file, kind, signal, onProgress = () => {}) {
   if (!url) throw new Error('Яндекс не вернул ссылку на файл.');
   const timeout = new AbortController();
   let timer;
-  const refresh = () => { clearTimeout(timer); timer = setTimeout(() => timeout.abort(new Error('Нет данных от файлового сервера 25 секунд.')), 25000); };
+  const refresh = () => { clearTimeout(timer); timer = setTimeout(() => timeout.abort(new Error(`Нет данных от файлового сервера ${timeoutMs / 1000} с.`)), timeoutMs); };
   refresh();
   try {
     const response = await fetch(mediaUrl(url), { credentials: 'omit', signal: AbortSignal.any([signal, timeout.signal]) });

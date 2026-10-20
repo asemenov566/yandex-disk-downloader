@@ -40,7 +40,7 @@ export function newJob(link, mode = 'auto', { deduplicate = false } = {}) {
   if (!['auto', 'original', 'preview'].includes(mode)) throw new Error('Неизвестный режим качества.');
   return { ...parseLink(link), version: 2, mode, deduplicate: !!deduplicate, title: '', folder: '', phase: 'scanning', pages: 0,
     directories: [{ path: parseLink(link).path, local: '', offset: 0, state: 'pending', root: true }],
-    files: [], usedPaths: {}, originalFailures: 0, usePreviews: mode === 'preview', created: new Date().toISOString() };
+    files: [], usedPaths: {}, originalFailures: 0, runNewFiles: 0, usePreviews: mode === 'preview', created: new Date().toISOString() };
 }
 
 function allocate(job, parent, name, remotePath) {
@@ -104,21 +104,33 @@ export function summary(job) {
   return { total: job.files.length, photos: job.files.filter(f => f.kind === 'photo').length,
     done: count('done'), pending: count('pending') + count('active'), skipped: count('skipped'), failed: count('failed'),
     reused: job.files.filter(f => f.state === 'done' && f.reused).length,
+    newFiles: Number.isSafeInteger(job.runNewFiles) && job.runNewFiles >= 0 ? job.runNewFiles : 0,
     originals: job.files.filter(f => f.state === 'done' && f.savedKind === 'original').length,
     previews: job.files.filter(f => f.state === 'done' && f.savedKind === 'preview').length,
     directoriesFailed: job.directories.filter(d => d.state === 'failed').length };
 }
 
-export function report(job) {
+function csv(rows) {
   const quote = v => {
     let text = String(v ?? '');
     if (/^[=+@\-\t\r]/.test(text)) text = "'" + text;
     return '"' + text.replaceAll('"', '""') + '"';
   };
-  const rows = [['Путь на Диске', 'Результат', 'Качество', 'Сохранённый файл', 'Ошибка / причина']];
+  return '\ufeff' + rows.map(row => row.map(quote).join(';')).join('\r\n');
+}
+const reportHeader = ['Путь на Диске', 'Результат', 'Качество', 'Сохранённый файл', 'Ошибка / причина'];
+function reportRows(job) {
+  const rows = [];
   for (const file of job.files) rows.push([file.path, file.state, file.savedKind || '', file.savedPath || '', file.reason || '']);
   for (const dir of job.directories.filter(d => d.state === 'failed')) rows.push([dir.path, 'failed_directory', '', '', dir.reason]);
-  return '\ufeff' + rows.map(row => row.map(quote).join(';')).join('\r\n');
+  return rows;
+}
+export function report(job) {
+  return csv([reportHeader, ...reportRows(job)]);
+}
+export function reportAll(jobs) {
+  return csv([['Альбом', 'Публичная ссылка', ...reportHeader],
+    ...jobs.flatMap(job => reportRows(job).map(row => [job.title || job.path, job.publicUrl, ...row]))]);
 }
 
 export function mediaUrl(value) {

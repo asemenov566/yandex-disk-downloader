@@ -1,19 +1,57 @@
 let creating;
+const activityAlarm = 'download-activity';
+let powerUpdates = Promise.resolve();
+function setActivity(active) {
+  powerUpdates = powerUpdates.catch(() => {}).then(async () => {
+    if (active) {
+      chrome.power.requestKeepAwake('system');
+      if (!await chrome.alarms.get(activityAlarm)) await chrome.alarms.create(activityAlarm, { periodInMinutes: 0.5 });
+    } else {
+      chrome.power.releaseKeepAwake();
+      await chrome.alarms.clear(activityAlarm);
+    }
+  });
+  return powerUpdates;
+}
+chrome.alarms.onAlarm.addListener(async alarm => {
+  if (alarm.name !== activityAlarm) return;
+  // A real browser event checks the offscreen worker even with no UI activity.
+  // Never start a new runner or resume a paused queue from this watchdog.
+  try {
+    const result = await chrome.runtime.sendMessage({ target: 'runner', action: 'activity' });
+    await setActivity(result?.ok && result.value === true);
+  } catch { await setActivity(false); }
+});
 async function ensureRunner() {
   const url = chrome.runtime.getURL('offscreen.html');
   const contexts = await chrome.runtime.getContexts({ contextTypes: ['OFFSCREEN_DOCUMENT'], documentUrls: [url] });
-  if (contexts.length) return;
-  if (!creating) {
+  if (!contexts.length && !creating) {
     creating = chrome.offscreen.createDocument({
       url: 'offscreen.html', reasons: ['BLOBS'],
       justification: 'Download and validate photos, create Blob URLs, and keep the queue independent of the popup.'
     }).finally(() => { creating = null; });
   }
-  await creating;
+  if (creating) await creating;
+  // A context can already exist while its module is still loading. Confirm
+  // the listener is ready before sending a command, without replaying commands.
+  for (let attempt = 0; attempt < 50; attempt++) {
+    try {
+      const response = await chrome.runtime.sendMessage({ target: 'runner', action: 'activity' });
+      if (response?.ok) return;
+    } catch { /* Cold start: message listener is not installed yet. */ }
+    await new Promise(resolve => setTimeout(resolve, 100));
+  }
+  throw new Error('Фоновый обработчик не успел запуститься. Повторите действие.');
 }
 chrome.runtime.onMessage.addListener((message, sender, respond) => {
   if (sender.id !== chrome.runtime.id || message.target !== 'background') return;
   (async () => {
+    if (message.type === 'activity' || message.type === 'delay') {
+      if (sender.url !== chrome.runtime.getURL('offscreen.html')) throw new Error('Недопустимый отправитель.');
+      if (message.type === 'activity') return setActivity(message.active === true);
+      if (!Number.isFinite(message.ms) || message.ms < 0 || message.ms > 1000) throw new Error('Недопустимая задержка.');
+      return new Promise(resolve => setTimeout(resolve, message.ms));
+    }
     if (message.type === 'download-api') {
       if (sender.url !== chrome.runtime.getURL('offscreen.html')) throw new Error('Недопустимый отправитель.');
       if (message.method === 'download') {

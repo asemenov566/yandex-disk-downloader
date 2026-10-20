@@ -1,6 +1,19 @@
 import { createQueue } from './queue.js';
 import { resource, getPhoto, originalUrl } from './network.js';
-import { loadEntries, saveEntry, deleteEntry, loadHistory, saveHistory } from './storage.js';
+import * as cache from './storage.js';
+import { createPortableStorage } from './portable-state.js';
+import { requireFolder, findLocalFiles, saveLocalFile, verifyLocalRecord } from './local-files.js';
+
+let busy = false;
+// Keep the granted handle in the long-lived document, rather than reconstructing
+// it for each file or depending on the popup's lifetime.
+let selectedFolder = cache.loadDownloadFolder();
+const { version: extensionVersion } = await (await fetch(new URL('./manifest.json', import.meta.url))).json();
+const portable = createPortableStorage({ cache, extensionVersion });
+function activity(active) {
+  busy = active;
+  chrome.runtime.sendMessage({ target: 'background', type: 'activity', active }).catch(() => {});
+}
 
 async function downloadApi(method, args) {
   const response = await chrome.runtime.sendMessage({ target: 'background', type: 'download-api', method,
@@ -8,15 +21,34 @@ async function downloadApi(method, args) {
   if (!response?.ok) throw new Error(response?.error || 'Chrome не ответил на запрос загрузки.');
   return response.value;
 }
-const runner = createQueue({ loadEntries, saveEntry, deleteEntry, loadHistory, saveHistory, resource, getPhoto, getOriginalUrl: originalUrl, downloads: {
+const runner = createQueue({ loadEntries: portable.loadEntries, saveEntry: portable.saveEntry, deleteEntry: portable.deleteEntry,
+  loadHistory: portable.loadHistory, saveHistory: portable.saveHistory, loadSettings: portable.loadSettings, saveSettings: portable.saveSettings,
+  prepareDownloads: async () => portable.prepare(await selectedFolder),
+  changeFolder: async token => {
+    const handle = await requireFolder(await cache.loadFolderCandidate(token));
+    const restored = await portable.changeFolder(handle);
+    await cache.saveDownloadFolder(handle); selectedFolder = Promise.resolve(handle);
+    return restored;
+  },
+  findLocal: async (job, file) => findLocalFiles(await selectedFolder, job, file),
+  saveLocal: async (path, source, options) => saveLocalFile(await selectedFolder, path, source, options),
+  verifyLocal: async record => verifyLocalRecord(await selectedFolder, record),
+  onActivityChange: active => { if (busy !== active) activity(active); },
+  // Short polling delays run in the service worker, not a throttled hidden page.
+  sleep: async ms => {
+    const response = await chrome.runtime.sendMessage({ target: 'background', type: 'delay', ms });
+    if (!response?.ok) throw new Error(response?.error || 'Фоновый таймер недоступен.');
+  },
+  resource, getPhoto, getOriginalUrl: originalUrl, downloads: {
   download: args => downloadApi('download', args), search: args => downloadApi('search', args), cancel: id => downloadApi('cancel', id),
   removeFile: id => downloadApi('removeFile', id),
   discardInvalid: args => downloadApi('discardInvalid', args)
 } });
 chrome.runtime.onMessage.addListener((message, sender, respond) => {
   if (sender.id !== chrome.runtime.id || message.target !== 'runner') return;
+  if (message.action === 'activity') { respond({ ok: true, value: busy }); return; }
   runner.command(message.action, message.args).then(
-    value => respond({ ok: true, value }), error => respond({ ok: false, error: error.message })
+    value => respond({ ok: true, value: { ...value, ...(portable.error ? { notice: portable.error.message } : {}) } }), error => respond({ ok: false, error: error.message })
   );
   return true;
 });

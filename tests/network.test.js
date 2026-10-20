@@ -61,3 +61,23 @@ test('user pause aborts fetch and does not leave a running timeout', async () =>
   const restore = harness(async (url, options) => { options.signal.throwIfAborted(); });
   try { await assert.rejects(getPhoto(job, file, 'preview', controller.signal), error => error.name === 'AbortError'); } finally { restore(); }
 });
+
+test('photo transfer obeys the selected no-data timeout', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  for (const seconds of [5, 25, 240]) {
+    let entered, signal;
+    const started = new Promise(resolve => { entered = resolve; });
+    const restore = harness(async (url, options) => {
+      if (String(url).startsWith('https://cloud-api')) return Response.json({ href: 'https://downloader.disk.yandex.ru/a' });
+      signal = options.signal; entered();
+      return new Promise((_, reject) => signal.addEventListener('abort', () => reject(signal.reason), { once: true }));
+    });
+    try {
+      const transfer = getPhoto(job, file, 'original', new AbortController().signal, () => {}, seconds * 1000);
+      await started;
+      t.mock.timers.tick(seconds * 1000 - 1); assert.equal(signal.aborted, false);
+      t.mock.timers.tick(1);
+      await assert.rejects(transfer, new RegExp(seconds + ' с'));
+    } finally { restore(); }
+  }
+});

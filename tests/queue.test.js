@@ -5,15 +5,18 @@ import { newJob } from '../extension/core.js';
 
 const tick = () => new Promise(resolve => setTimeout(resolve, 0));
 async function until(check) { for (let n = 0; n < 100; n++) { if (check()) return; await tick(); } throw new Error('Condition not reached'); }
-function setup(concurrency) {
-  const entered = [], gates = [], saved = new Map(), files = [];
+function setup(concurrency, downloadLimit = 50) {
+  const entered = [], gates = [], saved = new Map(), files = [], scans = [], kinds = [], failures = new Set();
   const queue = createQueue({
-    concurrency, loadEntries: async () => [], saveEntry: async entry => { saved.set(entry.id, structuredClone(entry)); },
-    resource: async job => ({ type: 'dir', name: job.publicUrl.split('/').pop(), _embedded: { total: 1, offset: 0,
-      items: [{ type: 'file', name: 'a.JPG', path: job.path === '/' ? '/a.JPG' : job.path + '/a.JPG', size: 3, media_type: 'image' }] } }),
-    getPhoto: async (job, _file, _kind, signal) => {
+    concurrency, loadSettings: async () => ({ downloadLimit }), loadEntries: async () => [],
+    saveEntry: async entry => { saved.set(entry.id, structuredClone(entry)); }, deleteEntry: async id => { saved.delete(id); },
+    resource: async job => { scans.push(job.publicUrl); return { type: 'dir', name: job.publicUrl.split('/').pop(), _embedded: { total: 1, offset: 0,
+      items: [{ type: 'file', name: 'a.JPG', path: job.path === '/' ? '/a.JPG' : job.path + '/a.JPG', size: 3, media_type: 'image' }] } }; },
+    getPhoto: async (job, _file, kind, signal) => {
       entered.push(job.publicUrl + job.path);
+      kinds.push(kind);
       await new Promise((resolve, reject) => { gates.push(resolve); signal.addEventListener('abort', () => reject(signal.reason), { once: true }); });
+      if (failures.has(job.publicUrl)) throw new Error('Unavailable');
       return new Blob(['abc'], { type: 'image/jpeg' });
     },
     downloads: {
@@ -21,8 +24,167 @@ function setup(concurrency) {
       search: async ({ id }) => [{ id, state: 'complete', exists: true, fileSize: 3, filename: files[id - 1].filename }], cancel: async () => {}
     }, sleep: async () => {}
   });
-  return { queue, entered, gates, saved, files };
+  return { queue, entered, gates, saved, files, scans, kinds, failures };
 }
+
+test('retry all targets completed errors, includes previews only when selected, and does not rescan', async () => {
+  const h = setup(1);
+  h.failures.add('https://disk.yandex.ru/d/bad');
+  for (const [name, mode] of [['good', 'original'], ['bad', 'original'], ['preview', 'preview']]) {
+    const count = h.gates.length;
+    await h.queue.command('scan', { link: 'https://disk.yandex.ru/d/' + name, mode });
+    await until(() => h.gates.length === count + 1); h.gates[count](); await h.queue.waitUntilIdle();
+  }
+  const active = await h.queue.command('scan', { link: 'https://disk.yandex.ru/d/active' });
+  await until(() => h.gates.length === 4);
+  h.failures.clear();
+  const retry = await h.queue.command('retryAll', { id: active.id });
+  assert.equal(retry.id, active.id);
+  assert.equal(retry.jobs.filter(j => j.queued).length, 1);
+  assert(retry.jobs.find(j => j.publicUrl.endsWith('/preview')).completed);
+  h.gates[3](); await until(() => h.gates.length === 5); h.gates[4](); await h.queue.waitUntilIdle();
+  assert.equal(h.scans.length, 4);
+  await h.queue.command('retryAll', { includePreviews: true });
+  await until(() => h.gates.length === 6); h.gates[5](); await h.queue.waitUntilIdle();
+  assert.equal(h.kinds[5], 'original'); assert.equal(h.scans.length, 4);
+  assert.equal(h.entered.filter(url => url.endsWith('/good/')).length, 1);
+  assert.equal(h.entered.filter(url => url.endsWith('/active/')).length, 1);
+});
+
+test('download all rescans only completed albums, preserving ids, paths and per-album options', async () => {
+  const h = setup(1), ids = [];
+  for (const link of ['https://disk.yandex.ru/d/a/nested', 'https://disk.yandex.ru/d/b']) {
+    const count = h.gates.length;
+    ids.push((await h.queue.command('scan', { link, mode: 'original', deduplicate: true })).id);
+    await until(() => h.gates.length === count + 1); h.gates[count](); await h.queue.waitUntilIdle();
+  }
+  const paused = await h.queue.command('scan', { link: 'https://disk.yandex.ru/d/paused' });
+  await until(() => h.gates.length === 3); await h.queue.command('pause', { id: paused.id }); await h.queue.waitUntilIdle();
+  const active = await h.queue.command('scan', { link: 'https://disk.yandex.ru/d/active' });
+  await until(() => h.gates.length === 4);
+  const before = h.scans.length;
+  await h.queue.command('downloadAll', { includePreviews: true });
+  h.gates[3](); await until(() => h.gates.length === 5); h.gates[4]();
+  await until(() => h.gates.length === 6); h.gates[5](); await h.queue.waitUntilIdle();
+  assert.equal(h.scans.length, before + 3); // Root title + nested directory, then album b.
+  assert.equal(h.saved.get(ids[0]).job.path, '/nested');
+  for (const id of ids) { assert.equal(h.saved.get(id).job.mode, 'original'); assert.equal(h.saved.get(id).job.deduplicate, true); }
+  assert.equal(h.entered.filter(url => url.endsWith('/paused/')).length, 1);
+  assert.equal(h.entered.filter(url => url.endsWith('/active/')).length, 1);
+  assert.equal((await h.queue.command('status')).jobs.length, 4);
+});
+
+test('stop all cancels active and queued albums; resume all continues checkpoints without rescanning', async () => {
+  const h = setup(1);
+  const done = await h.queue.command('scan', { link: 'https://disk.yandex.ru/d/done' });
+  await until(() => h.gates.length === 1); h.gates[0](); await h.queue.waitUntilIdle();
+  const a = await h.queue.command('scan', { link: 'https://disk.yandex.ru/d/a' });
+  await h.queue.command('scan', { link: 'https://disk.yandex.ru/d/b' });
+  await until(() => h.gates.length === 2);
+  const stopped = await h.queue.command('stopAll', { id: a.id });
+  assert.equal(stopped.id, a.id);
+  assert(stopped.jobs.every(j => !j.running && !j.queued));
+  assert.equal(stopped.jobs.filter(j => j.resumable).length, 2);
+  assert.equal(stopped.jobs.find(j => j.id === done.id).phase, 'done');
+  assert.equal(h.entered.length, 2); // The queued album was not started by cancellation.
+  await h.queue.command('resumeAll');
+  await until(() => h.gates.length === 3); h.gates[2]();
+  await until(() => h.gates.length === 4); h.gates[3](); await h.queue.waitUntilIdle();
+  assert.equal(h.scans.filter(url => url.endsWith('/a')).length, 1);
+  assert.equal(h.files.length, 3);
+  assert((await h.queue.command('status')).jobs.every(j => !j.resumable && j.phase === 'done'));
+});
+
+test('resume all includes paused and stopped tasks without restarting a running task', async () => {
+  const h = setup(undefined, 1);
+  const a = await h.queue.command('scan', { link: 'https://disk.yandex.ru/d/a' });
+  await until(() => h.gates.length === 1);
+  await h.queue.command('pause', { id: a.id }); await h.queue.waitUntilIdle();
+  const b = await h.queue.command('scan', { link: 'https://disk.yandex.ru/d/b' });
+  await until(() => h.gates.length === 2);
+  await h.queue.command('stop', { id: b.id }); await h.queue.waitUntilIdle();
+  const c = await h.queue.command('scan', { link: 'https://disk.yandex.ru/d/c' });
+  await until(() => h.gates.length === 3);
+  await h.queue.command('resumeAll', { id: c.id });
+  h.gates[2](); await until(() => h.gates.length === 4); h.gates[3]();
+  await until(() => h.gates.length === 5); h.gates[4](); await h.queue.waitUntilIdle();
+  assert.equal(h.entered.filter(url => url.endsWith('/c/')).length, 1);
+  assert.equal(h.files.length, 3); assert.equal(h.scans.length, 3);
+});
+
+test('pause all preserves queued retry intent and resumes without restarting completed albums', async () => {
+  const h = setup(1);
+  const done = await h.queue.command('scan', { link: 'https://disk.yandex.ru/d/done' });
+  await until(() => h.gates.length === 1); h.gates[0](); await h.queue.waitUntilIdle();
+  const a = await h.queue.command('scan', { link: 'https://disk.yandex.ru/d/a' });
+  await h.queue.command('retry', { id: done.id, includePreviews: true });
+  await until(() => h.gates.length === 2);
+  const paused = await h.queue.command('pauseAll');
+  assert(paused.jobs.every(j => !j.running && !j.queued && j.phase !== 'stopped'));
+  assert.equal(h.entered.length, 2);
+  assert.equal(h.saved.get(done.id).suspendedRetry.includePreviews, true);
+  await h.queue.command('resumeAll');
+  await until(() => h.gates.length === 3); h.gates[2](); await h.queue.waitUntilIdle();
+  assert.equal(h.scans.length, 2);
+  assert.equal((await h.queue.command('status', { id: a.id })).job.summary.done, 1);
+});
+
+test('combined report saves all albums and errors to one CSV without modifying jobs', async () => {
+  const jobs = ['first', 'second'].map(id => ({ id, wanted: false, job: {
+    ...newJob('https://disk.yandex.ru/d/' + id), title: id === 'first' ? '=unsafe;"title"' : id,
+    phase: 'done', files: [{ path: '/a.jpg', state: id === 'first' ? 'done' : 'failed', savedKind: 'preview', reason: 'error\nwith newline' }]
+  } }));
+  let saved, prepared = 0;
+  const queue = createQueue({ loadEntries: async () => structuredClone(jobs), saveEntry: async () => {},
+    prepareDownloads: async () => { prepared++; }, saveLocal: async (path, blob, options) => { saved = { path, text: await blob.text(), size: blob.size, options }; }
+  });
+  const result = await queue.command('reportAll');
+  assert.equal(prepared, 1); assert.equal(result.jobs.length, 2);
+  assert.match(saved.path, /^yandex-disk\/download-report-all-.*\.csv$/);
+  assert.equal(saved.options.expectedSize, saved.size);
+  assert(saved.text.includes('https://disk.yandex.ru/d/first'));
+  assert(saved.text.includes('https://disk.yandex.ru/d/second'));
+  assert(saved.text.includes('"\'=unsafe;""title"""'));
+  assert(saved.text.includes('preview')); assert(saved.text.includes('failed'));
+});
+test('deleting an active row cancels it and cannot resurrect it after a checkpoint', async () => {
+  const h = setup();
+  const a = await h.queue.command('scan', { link: 'https://disk.yandex.ru/d/a' });
+  await until(() => h.gates.length === 1);
+  const result = await h.queue.command('delete', { id: a.id });
+  await h.queue.waitUntilIdle();
+  assert.equal(result.jobs.length, 0); assert.equal(result.job, null);
+  assert.equal(h.saved.has(a.id), false); assert.equal(h.files.length, 0);
+  const next = await h.queue.command('scan', { link: 'https://disk.yandex.ru/d/a' });
+  assert.notEqual(next.id, a.id);
+  await until(() => h.gates.length === 2); h.gates[1](); await h.queue.waitUntilIdle();
+  await h.queue.command('delete', { id: next.id });
+  assert.equal(h.files.length, 1); assert.equal(h.saved.size, 0);
+});
+
+test('settings change the global file budget during running jobs', async () => {
+  const h = setup(undefined, 1);
+  await h.queue.command('scan', { link: 'https://disk.yandex.ru/d/a' });
+  await h.queue.command('scan', { link: 'https://disk.yandex.ru/d/b' });
+  await until(() => h.gates.length === 1);
+  assert.equal((await h.queue.command('status')).downloadLimit, 1);
+  await h.queue.command('settings', { downloadLimit: 5 });
+  await until(() => h.gates.length === 2);
+  await assert.rejects(h.queue.command('settings', { downloadLimit: 0 }));
+  h.gates.forEach(resolve => resolve()); await h.queue.waitUntilIdle();
+  assert.equal(h.files.length, 2);
+});
+
+test('changing folder is refused while any download is active', async () => {
+  const h = setup();
+  const a = await h.queue.command('scan', { link: 'https://disk.yandex.ru/d/a' });
+  await until(() => h.gates.length === 1);
+  await assert.rejects(h.queue.command('folder', { token: 'candidate' }), /приостановите/);
+  await h.queue.command('pause', { id: a.id }); await h.queue.waitUntilIdle();
+  await h.queue.command('folder', { token: 'candidate' });
+  assert.equal(h.files.length, 0);
+});
+
 test('queued retry keeps preview option until a worker becomes available', async () => {
   const h = setup(1);
   const a = await h.queue.command('scan', { link: 'https://disk.yandex.ru/d/a', mode: 'preview' });
@@ -35,6 +197,22 @@ test('queued retry keeps preview option until a worker becomes available', async
   h.gates[2](); await h.queue.waitUntilIdle();
   assert.equal((await h.queue.command('status', { id: a.id })).job.summary.originals, 1);
   assert.equal(h.files.length, 3);
+});
+
+test('stop all preserves a queued retry of previews for resume all', async () => {
+  const h = setup(1);
+  const a = await h.queue.command('scan', { link: 'https://disk.yandex.ru/d/a', mode: 'preview' });
+  await until(() => h.gates.length === 1); h.gates[0](); await h.queue.waitUntilIdle();
+  await h.queue.command('scan', { link: 'https://disk.yandex.ru/d/b' });
+  await until(() => h.gates.length === 2);
+  await h.queue.command('retry', { id: a.id, includePreviews: true });
+  await h.queue.command('stopAll');
+  assert((await h.queue.command('status')).jobs.find(j => j.id === a.id).resumable);
+  await h.queue.command('resumeAll');
+  await until(() => h.gates.length === 3); h.gates[2]();
+  await until(() => h.gates.length === 4); h.gates[3](); await h.queue.waitUntilIdle();
+  assert.equal((await h.queue.command('status', { id: a.id })).job.summary.originals, 1);
+  assert.equal(h.scans.filter(url => url.endsWith('/a')).length, 1);
 });
 
 test('two independent albums run concurrently; third waits; stopped queue does not start', async () => {
@@ -96,7 +274,7 @@ test('all-job issue details are requested on demand without truncation and prese
   assert.equal(full.jobs[1].summary.directoriesFailed, 1);
 });
 
-test('production default has no album count limit: seven independent jobs start together', async () => {
+test('seven independent albums share an explicitly raised file limit', async () => {
   const jobs = [];
   const unlimited = setup();
   for (let n = 0; n < 7; n++) jobs.push(await unlimited.queue.command('scan', { link: 'https://disk.yandex.ru/d/album-' + n }));

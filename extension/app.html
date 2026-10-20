@@ -1,37 +1,70 @@
 <!doctype html>
 <html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Загрузчик Яндекс Диска</title><link rel="stylesheet" href="app.css"></head>
 <body><main>
-<header><img class="mark" src="icons/icon-128.png" width="40" height="40" alt=""><div class="brand"><h1>Загрузчик Яндекс Диска</h1><p>Файлы и папки из нескольких альбомов</p></div><div class="header-tools"><nav class="window-actions" aria-label="Открыть расширение отдельно"><button id="open-window" class="secondary">Открыть окно</button><button id="open-tab" class="secondary">Открыть вкладку</button></nav><span class="version">1.2.4</span></div></header>
-<details class="card overall-card" id="overall-card" hidden>
-<summary><span class="overall-heading">Общий прогресс<span id="overall-caption">Все задания</span></span><span class="badge" id="overall-percent">0%</span></summary>
-<div class="overall-body" aria-live="polite">
-<div class="metrics"><div><strong id="overall-total">0</strong><span>найдено файлов</span></div><div><strong id="overall-done">0</strong><span>сохранено</span></div><div><strong id="overall-skipped">0</strong><span>пропущено</span></div><div><strong id="overall-failed">0</strong><span>ошибок</span></div></div>
-<progress id="overall-progress" value="0" max="1" aria-label="Общий прогресс всех заданий"></progress>
-<p class="hint" id="overall-detail"></p>
-<p class="hint" id="overall-scope">Сумма всех заданий в списке, включая завершённые и приостановленные.</p>
-<ul class="overall-current" id="overall-current"></ul>
-<details class="issues overall-issues" id="overall-issues" hidden><summary>Ошибки и пропуски всех заданий · <span id="overall-issues-count">0</span></summary><p class="hint" id="overall-issues-loading">Откройте список, чтобы увидеть полный путь и причину.</p><ul id="overall-issues-list"></ul></details>
-</div>
-</details>
-<section class="card">
-<label for="link">Публичная ссылка на альбом или папку</label>
-<div class="input-row"><input id="link" type="url" placeholder="https://disk.yandex.ru/d/…" autocomplete="off"><button id="scan">Скачать всё</button></div>
-<div class="destination"><b>Сохраняем в</b><p id="destination">Загрузки / yandex-disk / название альбома</p></div>
+<header><img class="mark" src="icons/icon-128.png" width="40" height="40" alt=""><div class="brand"><h1>Загрузчик Яндекс Диска</h1><p>Файлы и папки из нескольких альбомов</p></div><div class="header-tools"><div class="settings-tools"><button id="settings-open" class="gear" type="button" title="Настройки" aria-label="Настройки" aria-haspopup="dialog">⚙</button><span class="version">1.3.10</span></div></div></header>
+<details class="card source-card" id="source-card" open>
+<summary id="source-heading">Публичная ссылка на альбом или папку</summary>
+<div class="source-body">
+<div class="input-row"><input id="link" type="url" aria-labelledby="source-heading" placeholder="https://disk.yandex.ru/d/…" autocomplete="off"><button id="scan">Скачать всё</button></div>
+<div class="destination"><b>Сохраняем в</b><p id="destination">Выбранная папка / yandex-disk / название альбома</p></div>
+<p id="folder-warning" class="hint">При первом скачивании выберите папку. Внутри создадим yandex-disk или используем уже существующую.</p>
 <label for="mode" class="sr-only">Режим скачивания</label>
 <select id="mode"><option value="auto">Оригиналы с заменой недоступных фото копиями</option><option value="original">Только оригиналы</option></select>
 <label class="check-row" title="Если на Яндекс Диске есть два одинаковых файла, при установленном флажке будут скачаны оба. Снимите флажок, чтобы сохранять одну копию одинаковых файлов внутри каждой папки. Уже скачанный файл повторно не загружается в любом случае."><input type="checkbox" id="download-all" checked aria-describedby="duplicates-hint">Скачивать все без проверки дублей</label>
 <span id="duplicates-hint" class="sr-only">Если на Яндекс Диске есть два одинаковых файла, при установленном флажке будут скачаны оба. Снимите флажок, чтобы сохранять одну копию одинаковых файлов внутри каждой папки. Уже скачанный файл повторно не загружается в любом случае.</span>
 <details class="hint"><summary>Качество и структура папок</summary><p>Сначала скачиваем фотографии из всех подпапок, затем видео, документы и остальные файлы. Видео и документы скачиваются в оригинале. При новом запуске проверяем сохранённое и пробуем заменить превью оригиналом.</p></details>
+</div>
+</details>
+<section class="card overall-card" id="overall-card" aria-labelledby="overall-title" hidden>
+<div class="overall-header"><h2 class="overall-heading" id="overall-title">Общий прогресс<span id="overall-caption">Все задания</span></h2><span class="download-badges"><span class="badge" id="overall-percent">0%</span><span class="badge new-files" id="overall-new-files" title="Сумма новых оригиналов и preview за текущие запуски всех заданий. Уже существующие файлы не учитываются.">Новых: 0</span></span></div>
+<div class="overall-body" aria-live="polite">
+<div class="metrics"><div><strong id="overall-total">0</strong><span>найдено файлов</span></div><div><strong id="overall-originals">0</strong><span>оригиналов</span></div><div><strong id="overall-previews">0</strong><span>копий (preview)</span></div><div><strong id="overall-skipped">0</strong><span>пропущено</span></div><div><strong id="overall-failed">0</strong><span>ошибок</span></div></div>
+<progress id="overall-progress" value="0" max="1" aria-label="Общий прогресс всех заданий"></progress>
+<p class="hint" id="overall-detail"></p>
+<p class="hint" id="overall-scope">Сумма всех заданий в списке, включая завершённые и приостановленные.</p>
+<ul class="overall-current" id="overall-current"></ul>
+<details class="issues overall-issues" id="overall-issues" hidden><summary>Ошибки и пропуски всех заданий · <span id="overall-issues-count">0</span></summary><p class="hint" id="overall-issues-loading">Откройте список, чтобы увидеть полный путь и причину.</p><ul id="overall-issues-list"></ul></details>
+<div class="actions bulk-actions" aria-label="Действия для всех заданий">
+<button id="resume-all" type="button">Продолжить все</button>
+<button id="pause-all" class="secondary" type="button">Приостановить все</button>
+<button id="stop-all" class="secondary" type="button">Остановить все</button>
+<span id="retry-all-controls" class="retry-controls"><button id="retry-all" class="secondary" type="button" title="Повторить ошибки всех завершённых заданий по сохранённым спискам">Повторить все ошибки</button><label class="check-row"><input id="retry-all-previews" type="checkbox" title="При общем повторе ошибок также пробовать оригиналы для сохранённых preview">Считать preview ошибкой</label></span>
+<button id="report-all" class="text-button" type="button">Отчёт по всем</button>
+</div>
+<div class="actions bulk-extra"><button id="download-completed" class="secondary" type="button" hidden title="Заново проверить все завершённые альбомы и скачать недостающее. Существующие файлы не дублируются.">Повторить всё</button></div>
+<section class="queue-card" id="queue-card" hidden><label for="jobs">Задания · независимые загрузки</label><select id="jobs" aria-label="Выбрать задание"></select></section>
+</div>
 </section>
-<section class="card queue-card" id="queue-card" hidden><label for="jobs">Задания · независимые загрузки</label><select id="jobs" aria-label="Выбрать задание"></select></section><section class="card" aria-live="polite">
-<div class="status-head"><div><p class="eyebrow" id="phase">Готово к работе</p><h2 id="album">Укажите ссылку</h2></div><span class="badge" id="quality">Авто</span></div>
-<div class="metrics"><div><strong id="total">0</strong><span>найдено файлов</span></div><div><strong id="done">0</strong><span>сохранено</span></div><div><strong id="skipped">0</strong><span>пропущено</span></div><div><strong id="failed">0</strong><span>ошибок</span></div></div>
+<details class="card download-card" id="download-card" open>
+<summary class="status-head" id="download-heading" tabindex="-1"><span id="album">Загрузка — укажите ссылку</span><span class="download-badges"><span class="badge" id="job-percent" title="Обработано файлов выбранного задания">0%</span><span class="badge new-files" id="new-files" title="Новые оригиналы и preview, сохранённые за текущий запуск. Уже существующие файлы не учитываются.">Новых: 0</span></span></summary>
+<div class="download-body" aria-live="polite">
+<div class="metrics"><div><strong id="total">0</strong><span>найдено файлов</span></div><div><strong id="originals">0</strong><span>оригиналов</span></div><div><strong id="previews">0</strong><span>копий (preview)</span></div><div><strong id="skipped">0</strong><span>пропущено</span></div><div><strong id="failed">0</strong><span>ошибок</span></div></div>
 <progress id="progress" value="0" max="1"></progress>
 <p id="detail" class="hint">Список будет прочитан полностью, включая вложенные папки.</p>
 <p id="current" class="current"></p>
 <div class="actions"><button id="start" disabled>Продолжить</button><button id="pause" class="secondary" disabled>Пауза</button><button id="stop" class="secondary" disabled>Стоп</button><span class="retry-controls"><button id="retry" class="secondary" disabled>Повторить ошибки</button><label class="check-row" title="Только при повторе ошибок: попробовать оригиналы для уже найденных preview без повторного обхода альбома."><input type="checkbox" id="retry-previews">Считать preview ошибкой</label></span><button id="report" class="text-button" disabled>Отчёт</button></div>
 <p id="message" class="message" role="status"></p>
-</section>
-<details class="card issues" id="issues-card" hidden><summary>Пропуски и ошибки</summary><ul id="issues"></ul></details>
+<details class="issues" id="issues-card" hidden><summary>Пропуски и ошибки</summary><ul id="issues"></ul></details>
+</div>
+</details>
 <footer><span class="dot"></span> Попап можно закрыть — загрузка продолжится в фоне.</footer>
-</main><script type="module" src="app.js"></script></body></html>
+</main><dialog id="settings" aria-labelledby="settings-title">
+<div class="dialog-heading"><h2 id="settings-title">Настройки</h2><form method="dialog"><button class="text-button" aria-label="Закрыть настройки" title="Закрыть">×</button></form></div>
+<div class="settings-grid"><div><label for="download-limit">Одновременных скачиваний</label>
+<select id="download-limit"><option value="1">1</option><option value="5">5</option><option value="10">10</option><option value="15">15</option><option value="20">20</option><option value="25">25</option><option value="30">30</option><option value="35">35</option><option value="40">40</option><option value="45">45</option><option value="50">50</option></select>
+</div><div><label for="download-timeout">Ожидание данных</label><select id="download-timeout"><option value="5">5 секунд</option><option value="15">15 секунд</option><option value="25" selected>25 секунд</option><option value="40">40 секунд</option><option value="60">60 секунд</option><option value="120">120 секунд</option><option value="240">240 секунд</option></select></div></div><p class="hint">Лимит файлов меняется сразу. Время ожидания без новых данных — для следующих файлов.</p>
+<p id="active-downloads" class="hint" role="status"></p>
+<h3>Папка скачивания</h3>
+<p class="hint">Сохраняем в yandex-disk. Смена папки остановит все задания; продолжение — вручную.</p>
+<p id="folder-status" class="hint" role="status">Папка не выбрана.</p>
+<button id="choose-folder" class="secondary" type="button">Выбрать папку</button>
+<button id="allow-folder" class="secondary" type="button" hidden>Разрешить доступ</button>
+<p class="hint">База: yandex-disk/downloader-state.json</p>
+<h3>Страницы для скачивания</h3>
+<p class="hint">Удаление останавливает задание и убирает его из списка. Скачанные файлы и история сохраняются.</p>
+<ul id="settings-jobs" class="settings-jobs"></ul>
+<p id="settings-empty" class="hint">Заданий пока нет.</p>
+<p id="settings-message" class="message" role="status"></p>
+<nav class="window-actions" aria-label="Открыть расширение отдельно"><button id="open-window" class="secondary">Открыть окно</button><button id="open-tab" class="secondary">Открыть вкладку</button></nav>
+</dialog>
+<script type="module" src="app.js"></script></body></html>

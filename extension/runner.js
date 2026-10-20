@@ -1,12 +1,20 @@
 import { newJob, summary, report, outputPath, consumePage } from './core.js';
 import { waitFor } from './wait.js';
+import { createDownloadPool } from './pool.js';
 
 export function createRunner({ loadJob, saveJob, resource, getPhoto, getOriginalUrl, downloads,
   loadHistory = async () => ({}), saveHistory = async () => {}, withFileLock = async (_key, work) => work(),
+  runFiles = createDownloadPool().run,
+  findLocal = async () => null,
+  saveLocal, verifyLocal,
+  getTimeout = () => 25000,
   sleep = ms => new Promise(resolve => setTimeout(resolve, ms)), now = () => Date.now() }) {
   let job = null, running = false, controller, current = '', notice = '', stopping = false;
   let runPromise = Promise.resolve();
   const checkpoint = () => saveJob(job);
+  const countNewFile = () => {
+    job.runNewFiles = (Number.isSafeInteger(job.runNewFiles) && job.runNewFiles >= 0 ? job.runNewFiles : 0) + 1;
+  };
   const key = file => JSON.stringify([job.publicUrl, file.path]);
   const contentKey = file => /^[a-f0-9]{64}$/i.test(file.sha256 || '') ? JSON.stringify(['content',
     (job.folder + '/' + file.local.split('/').slice(0, -1).join('/')).normalize('NFC').toLowerCase(), file.sha256.toLowerCase()]) : null;
@@ -43,7 +51,7 @@ export function createRunner({ loadJob, saveJob, resource, getPhoto, getOriginal
     running = true; stopping = false; controller = new AbortController(); notice = '';
     runPromise = (async () => {
       try { await work(controller.signal); }
-      catch (error) { notice = controller.signal.aborted ? 'Приостановлено. Можно продолжить.' : error.message; }
+      catch (error) { notice = controller.signal.aborted && !controller.signal.reason?.status && !controller.signal.reason?.localAccess ? 'Приостановлено. Можно продолжить.' : error.message; }
       finally {
         if (stopping && job) { job.phase = 'stopped'; notice = 'Остановлено. Сохранённые файлы учтём при новом запуске.'; }
         running = false; current = '';
@@ -80,6 +88,7 @@ export function createRunner({ loadJob, saveJob, resource, getPhoto, getOriginal
   }
   async function existing(record, file) {
     if (!record || !sameSource(record, file)) return null;
+    if (verifyLocal) return verifyLocal(record);
     const [item] = await waitFor(downloads.search({ id: record.downloadId }), { signal: controller?.signal });
     return item?.state === 'complete' && item.exists === true &&
       item.filename === record.savedPath && item.fileSize === record.savedBytes ? item : null;
@@ -87,13 +96,14 @@ export function createRunner({ loadJob, saveJob, resource, getPhoto, getOriginal
   function recordOf(file) {
     return { downloadId: file.downloadId, savedPath: file.savedPath, savedBytes: file.savedBytes,
       savedKind: file.savedKind, size: file.size, sha256: file.sha256, modified: file.modified,
-      sourceKey: file.receiptSourceKey || key(file) };
+      sourceKey: file.receiptSourceKey || key(file), localFile: !!file.localFile };
   }
   function reuse(file, record, reason = '') {
     Object.assign(file, { downloadId: record.downloadId, savedPath: record.savedPath, savedBytes: record.savedBytes,
-      savedKind: record.savedKind, receiptSourceKey: record.sourceKey || key(file), state: 'done', reused: true, reason });
+      savedKind: record.savedKind, localFile: !!record.localFile, receiptSourceKey: record.sourceKey || key(file), state: 'done', reused: true, reason });
   }
   async function removeOldPreview(file, history) {
+    if (history.original?.localFile || history.preview?.localFile) return;
     if (!history.original || !history.preview || history.original.downloadId === history.preview.downloadId) return;
     // Verify the new original again before considering removal of our own preview.
     if (!await existing(history.original, file)) return;
@@ -116,8 +126,19 @@ export function createRunner({ loadJob, saveJob, resource, getPhoto, getOriginal
     await persistHistory(file, history);
     if (file.savedKind === 'original') await removeOldPreview(file, history);
   }
-  async function saveDownload(source, file, kind, signal, direct = false) {
+  async function saveDownload(source, file, kind, signal, direct = false, timeoutMs = getTimeout()) {
     signal.throwIfAborted();
+    if (saveLocal) {
+      file.savedKind = kind; file.savedBytes = direct ? file.size : source.size;
+      file.savedPath = outputPath(job, file, kind, direct ? file.mime || '' : source.type);
+      file.state = 'active'; file.reused = false; file.localFile = true; file.receiptSourceKey = key(file);
+      delete file.downloadId;
+      await checkpoint();
+      Object.assign(file, await saveLocal(file.savedPath, source, { signal, direct, timeout: timeoutMs, expectedSize: file.savedBytes,
+        onProgress: bytes => { current = `${file.name} · ${(bytes / 1048576).toFixed(1)} МБ`; } }));
+      countNewFile();
+      return;
+    }
     const url = direct ? source : URL.createObjectURL(source);
     let complete = false;
     try {
@@ -145,6 +166,7 @@ export function createRunner({ loadJob, saveJob, resource, getPhoto, getOriginal
             throw new Error('Размер сохранённого файла не совпал.');
           }
           file.savedPath = item.filename; file.savedBytes = item.fileSize;
+          countNewFile();
           complete = true; return;
         }
         if (item.state === 'interrupted') throw new Error('Chrome: ' + (item.error || 'загрузка прервана'));
@@ -154,8 +176,8 @@ export function createRunner({ loadJob, saveJob, resource, getPhoto, getOriginal
           const total = Number.isFinite(file.size) ? ` из ${(file.size / 1048576).toFixed(1)}` : '';
           const waiting = Math.floor((now() - lastData) / 1000);
           current = `${file.name} · ${(lastBytes / 1048576).toFixed(1)}${total} МБ` +
-            (waiting >= 2 ? ` · ждём данные ${waiting}/25 с` : '');
-          if (now() - lastData >= 25000) throw new Error('Нет данных от файлового сервера 25 секунд.');
+            (waiting >= 2 ? ` · ждём данные ${waiting}/${timeoutMs / 1000} с` : '');
+          if (now() - lastData >= timeoutMs) throw new Error(`Нет данных от файлового сервера ${timeoutMs / 1000} с.`);
         } else if (now() > deadline) throw new Error('Chrome не завершил сохранение. Проверьте загрузки браузера.');
         await sleep(400);
       }
@@ -165,36 +187,42 @@ export function createRunner({ loadJob, saveJob, resource, getPhoto, getOriginal
     }
   }
   async function downloadOne(file, signal) {
+    const timeoutMs = getTimeout();
+    const local = await findLocal(job, file);
+    if (local?.original) {
+      reuse(file, local.original, 'Файл уже есть в выбранной папке');
+      await remember(file); return;
+    }
     const history = await known(file);
     if (await existing(history.original, file)) {
       reuse(file, history.original, 'Уже сохранён полный файл');
       await persistHistory(file, history);
       await removeOldPreview(file, history); return;
     }
-    const preview = await existing(history.preview, file) ? history.preview : null;
+    const preview = local?.preview || (await existing(history.preview, file) ? history.preview : null);
     // Revisit originals for existing previews on every fresh scan, even after prior failures.
     let kind = !file.retryOriginal && file.kind === 'photo' && (job.mode === 'preview' || (job.usePreviews && !preview)) ? 'preview' : 'original';
-    if (kind === 'preview' && preview) { reuse(file, preview, 'Копия уже сохранена'); return; }
+    if (kind === 'preview' && preview) { reuse(file, preview, 'Копия уже сохранена'); await remember(file); return; }
     if (file.kind !== 'photo' && getOriginalUrl) {
       current = file.name + ' · получаем ссылку (до 20 с)';
       const url = await getOriginalUrl(job, file, signal);
-      await saveDownload(url, file, 'original', signal, true);
+      await saveDownload(url, file, 'original', signal, true, timeoutMs);
     } else {
       const progress = bytes => { current = `${file.name} · ${(bytes / 1048576).toFixed(1)} МБ`; };
       let blob;
       try {
-        blob = await getPhoto(job, file, kind, signal, progress);
+        blob = await getPhoto(job, file, kind, signal, progress, timeoutMs);
         if (kind === 'original' && file.kind === 'photo') job.originalFailures = 0;
       } catch (error) {
         signal.throwIfAborted();
         if (error.status === 429 || kind !== 'original' || (job.mode !== 'auto' && !file.retryOriginal) || file.kind !== 'photo') throw error;
         file.originalError = error.message; job.originalFailures++;
         if (job.originalFailures >= 3) job.usePreviews = true;
-        if (preview) { reuse(file, preview, 'Оригинал пока недоступен: ' + error.message); return; }
+        if (preview) { reuse(file, preview, 'Оригинал пока недоступен: ' + error.message); await remember(file); return; }
         kind = 'preview'; current = file.name + ' · пробуем копию для просмотра';
-        blob = await getPhoto(job, file, kind, signal, progress);
+        blob = await getPhoto(job, file, kind, signal, progress, timeoutMs);
       }
-      await saveDownload(blob, file, kind, signal);
+      await saveDownload(blob, file, kind, signal, false, timeoutMs);
     }
     file.state = 'done';
     file.reason = file.savedKind === 'preview' && file.originalError ? 'Оригинал недоступен: ' + file.originalError : '';
@@ -205,28 +233,34 @@ export function createRunner({ loadJob, saveJob, resource, getPhoto, getOriginal
     const pending = job.files.filter(f => f.state === 'pending');
     // All directories have already been scanned. Prioritize photos across the
     // whole selected tree, including when resuming an older saved queue.
-    const ordered = [...pending.filter(f => f.kind === 'photo'), ...pending.filter(f => f.kind !== 'photo')];
-    for (const file of ordered) {
-      job.pass = file.kind === 'photo' ? 'photos' : 'other';
+    const processFile = async file => {
       signal.throwIfAborted(); current = file.name;
       try {
         const lockKey = job.deduplicate && contentKey(file) || key(file);
-        await withFileLock(lockKey, async () => { signal.throwIfAborted(); await downloadOne(file, signal); }, signal);
+        const outputKey = 'output:' + outputPath(job, file, 'original', '').normalize('NFC').toLowerCase();
+        await withFileLock(outputKey, () => withFileLock(lockKey, async () => {
+          signal.throwIfAborted(); await downloadOne(file, signal);
+        }, signal), signal);
         delete file.retryOriginal;
       }
       catch (error) {
-        if (signal.aborted || error.status === 429) {
+        if (signal.aborted || error.status === 429 || error.localAccess) {
+          if (!signal.aborted) controller.abort(error);
           if (file.state !== 'done') { file.state = 'pending'; delete file.downloadId; }
           await checkpoint(); throw error;
         }
         file.state = 'failed'; file.reason = error.message;
       }
-      await checkpoint(); await sleep(250);
+      await checkpoint();
+    };
+    for (const pass of ['photos', 'other']) {
+      job.pass = pass;
+      await runFiles(pending.filter(f => (f.kind === 'photo') === (pass === 'photos')), processFile, signal);
     }
     job.phase = 'done'; await checkpoint();
     notice = summary(job).failed || summary(job).directoriesFailed ?
       'Готово с ошибками. Их можно повторить; остальные файлы сохранены.' :
-      'Готово. Файлы сохранены в папку альбома внутри «Загрузки / yandex-disk».';
+      'Готово. Файлы сохранены в папку альбома.';
   }
   async function recover() {
     if (!job) return;
@@ -272,9 +306,11 @@ export function createRunner({ loadJob, saveJob, resource, getPhoto, getOriginal
       launch(async signal => { job = next; await checkpoint(); await scan(signal); if (args.download !== false) await download(signal); });
     } else if (action === 'start' || action === 'retry') {
       if (!job) throw new Error('Сначала укажите ссылку.');
-      if (job.phase === 'stopped') throw new Error('Задание остановлено. Нажмите «Скачать всё», чтобы проверить папку заново.');
+      if (job.phase === 'stopped' && !args.resumeStopped) throw new Error('Задание остановлено. Нажмите «Скачать всё», чтобы проверить папку заново.');
       launch(async signal => {
         if (action === 'retry') {
+          // A retry is a new attempt; pause/resume keeps the same counter.
+          job.runNewFiles = 0;
           // Keep this intent on the file so pause/restart still attempts its original.
           if (args.includePreviews === true) {
             for (const f of job.files.filter(f => f.state === 'done' && f.savedKind === 'preview')) {
@@ -290,6 +326,11 @@ export function createRunner({ loadJob, saveJob, resource, getPhoto, getOriginal
       });
     } else if (action === 'report') {
       if (!job?.folder) throw new Error('Папка ещё не прочитана.');
+      if (saveLocal) {
+        const blob = new Blob([report(job)], { type: 'text/csv;charset=utf-8' });
+        await saveLocal(job.folder + '/download-report-' + now() + '.csv', blob, { expectedSize: blob.size });
+        return snapshot();
+      }
       const url = URL.createObjectURL(new Blob([report(job)], { type: 'text/csv;charset=utf-8' }));
       try { await downloads.download({ url, filename: job.folder + '/download-report.csv', saveAs: false, conflictAction: 'uniquify' }); }
       finally { setTimeout(() => URL.revokeObjectURL(url), 60000); }

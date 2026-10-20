@@ -1,0 +1,2 @@
+export const DOWNLOAD_TIMEOUTS = [5, 15, 25, 40, 60, 120, 240];
+export const DEFAULT_TIMEOUT_SECONDS = 25;
