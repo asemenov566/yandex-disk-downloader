@@ -37,3 +37,11 @@ test('empty or newly scanning queues have finite zero progress', () => {
   const result = overallProgress([{ running: true }, { running: true }]);
   assert.equal(result.visible, true); assert.equal(result.total, 0); assert.equal(result.percent, 0);
 });
+
+test('common attempt counts take priority over individual last-run totals, including zero', () => {
+  assert.equal(overallProgress([
+    { summary: { newFiles: 607 }, overallNewFiles: 1 },
+    { summary: { newFiles: 113 }, overallNewFiles: 113 },
+    { summary: { newFiles: 20 }, overallNewFiles: 0 }
+  ]).newFiles, 114);
+});

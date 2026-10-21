@@ -36,7 +36,7 @@ function entry(id = 'album') {
 test('JSON restores entries, errors, previews, receipts and settings with a completely new cache', async () => {
   const f = folder(), first = createPortableStorage({ cache: cache(), extensionVersion: '1.3.7' });
   await first.changeFolder(f.root);
-  const e = entry(); e.job.runNewFiles = 7; e.job.files.push(
+  const e = entry(); e.overallNewFilesBaseline = 5; e.job.runNewFiles = 7; e.job.files.push(
     { name: 'b.jpg', local: 'b.jpg', path: '/b.jpg', kind: 'photo', state: 'failed', reason: 'Unavailable' },
     { name: 'c.jpg', local: 'c.jpg', path: '/c.jpg', kind: 'photo', state: 'done', savedKind: 'preview' });
   await first.saveHistory('key', { original: { savedPath: 'yandex-disk/Album/a.jpg', localFile: true, downloadId: 999 } });
@@ -47,6 +47,7 @@ test('JSON restores entries, errors, previews, receipts and settings with a comp
   const restored = await second.changeFolder(f.root);
   assert.equal(restored.entries[0].wanted, false);
   assert.equal(restored.entries[0].job.runNewFiles, 7);
+  assert.equal(restored.entries[0].overallNewFilesBaseline, 5);
   assert.equal(restored.entries[0].suspendedRetry.includePreviews, true);
   assert.deepEqual(restored.entries[0].job.files.map(f => f.state), ['pending', 'failed', 'done']);
   assert.equal(restored.entries[0].job.files[1].reason, 'Unavailable');

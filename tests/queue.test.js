@@ -1,7 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createQueue } from '../extension/queue.js';
-import { newJob } from '../extension/core.js';
+import { newJob, outputPath } from '../extension/core.js';
+import { overallProgress } from '../extension/progress.js';
 
 const tick = () => new Promise(resolve => setTimeout(resolve, 0));
 async function until(check) { for (let n = 0; n < 100; n++) { if (check()) return; await tick(); } throw new Error('Condition not reached'); }
@@ -42,6 +43,8 @@ test('retry all targets completed errors, includes previews only when selected, 
   assert.equal(retry.id, active.id);
   assert.equal(retry.jobs.filter(j => j.queued).length, 1);
   assert(retry.jobs.find(j => j.publicUrl.endsWith('/preview')).completed);
+  assert.equal(overallProgress(retry.jobs).newFiles, 0);
+  assert.equal(retry.jobs.find(j => j.publicUrl.endsWith('/good')).summary.newFiles, 1);
   h.gates[3](); await until(() => h.gates.length === 5); h.gates[4](); await h.queue.waitUntilIdle();
   assert.equal(h.scans.length, 4);
   await h.queue.command('retryAll', { includePreviews: true });
@@ -49,6 +52,53 @@ test('retry all targets completed errors, includes previews only when selected, 
   assert.equal(h.kinds[5], 'original'); assert.equal(h.scans.length, 4);
   assert.equal(h.entered.filter(url => url.endsWith('/good/')).length, 1);
   assert.equal(h.entered.filter(url => url.endsWith('/active/')).length, 1);
+});
+
+test('repeat all starts a common counter while another album keeps its individual run; restore preserves both', async () => {
+  const old = newJob('https://disk.yandex.ru/d/completed');
+  old.phase = 'done'; old.runNewFiles = 20;
+  const active = newJob('https://disk.yandex.ru/d/active', 'original');
+  active.phase = 'downloading'; active.title = 'Active'; active.folder = 'yandex-disk/Active';
+  active.directories = []; active.runNewFiles = 606;
+  active.files = [{ name: 'last.jpg', path: '/last.jpg', local: 'last.jpg', kind: 'photo', size: 3, state: 'pending' }];
+  const saved = new Map([['old', { id: 'old', job: old }], ['active', { id: 'active', job: active }]]);
+  const disk = new Map(), gates = [];
+  let gate = true;
+  const dependencies = {
+    loadEntries: async () => structuredClone([...saved.values()]),
+    saveEntry: async entry => saved.set(entry.id, structuredClone(entry)),
+    resource: async () => ({ type: 'dir', name: 'Completed', _embedded: { total: 113, offset: 0,
+      items: Array.from({ length: 113 }, (_, i) => ({ type: 'file', name: `${i}.jpg`, path: `/${i}.jpg`, size: 3, media_type: 'image' })) } }),
+    getPhoto: async () => {
+      if (gate) await new Promise(resolve => gates.push(resolve));
+      return new Blob(['abc'], { type: 'image/jpeg' });
+    },
+    findLocal: async (job, file) => ({ original: disk.get(outputPath(job, file, 'original', '')) }),
+    saveLocal: async path => {
+      const record = { savedPath: path, savedBytes: 3, savedKind: 'original', localFile: true };
+      disk.set(path, record); return record;
+    }
+  };
+  const queue = createQueue(dependencies);
+  await queue.command('start', { id: 'active' });
+  await until(() => gates.length === 1);
+  assert.equal(overallProgress((await queue.command('status')).jobs).newFiles, 626);
+  const repeated = await queue.command('downloadAll');
+  assert.equal(overallProgress(repeated.jobs).newFiles, 0);
+  assert.equal(repeated.jobs.find(j => j.id === 'active').summary.newFiles, 606);
+  gate = false; gates.forEach(resolve => resolve()); await queue.waitUntilIdle();
+  const finished = await queue.command('status');
+  // The old sum is 607 + 113 = 720; only 114 files were written after the click.
+  assert.equal(finished.jobs.reduce((n, j) => n + j.summary.newFiles, 0), 720);
+  assert.equal(overallProgress(finished.jobs).newFiles, 114);
+  assert.equal(disk.size, 114);
+  const restored = createQueue(dependencies);
+  assert.equal(overallProgress((await restored.command('status')).jobs).newFiles, 114);
+  const noTargets = await restored.command('retryAll');
+  assert.equal(overallProgress(noTargets.jobs).newFiles, 114);
+  await restored.command('downloadAll'); await restored.waitUntilIdle();
+  assert.equal(overallProgress((await restored.command('status')).jobs).newFiles, 0);
+  assert.equal(disk.size, 114);
 });
 
 test('download all rescans only completed albums, preserving ids, paths and per-album options', async () => {
@@ -193,6 +243,7 @@ test('queued retry keeps preview option until a worker becomes available', async
   await until(() => h.gates.length === 2);
   const queued = await h.queue.command('retry', { id: a.id, includePreviews: true });
   assert.equal(queued.queued, true);
+  assert.equal(queued.job.summary.newFiles, 0);
   h.gates[1](); await until(() => h.gates.length === 3);
   h.gates[2](); await h.queue.waitUntilIdle();
   assert.equal((await h.queue.command('status', { id: a.id })).job.summary.originals, 1);

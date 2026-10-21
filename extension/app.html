@@ -1,7 +1,7 @@
 <!doctype html>
 <html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Загрузчик Яндекс Диска</title><link rel="stylesheet" href="app.css"></head>
 <body><main>
-<header><img class="mark" src="icons/icon-128.png" width="40" height="40" alt=""><div class="brand"><h1>Загрузчик Яндекс Диска</h1><p>Файлы и папки из нескольких альбомов</p></div><div class="header-tools"><div class="settings-tools"><button id="settings-open" class="gear" type="button" title="Настройки" aria-label="Настройки" aria-haspopup="dialog">⚙</button><span class="version">1.3.10</span></div></div></header>
+<header><img class="mark" src="icons/icon-128.png" width="40" height="40" alt=""><div class="brand"><h1>Загрузчик Яндекс Диска</h1><p>Файлы и папки из нескольких альбомов</p></div><div class="header-tools"><div class="settings-tools"><button id="settings-open" class="gear" type="button" title="Настройки" aria-label="Настройки" aria-haspopup="dialog">⚙</button><span class="version">1.3.11</span></div></div></header>
 <details class="card source-card" id="source-card" open>
 <summary id="source-heading">Публичная ссылка на альбом или папку</summary>
 <div class="source-body">
@@ -16,7 +16,7 @@
 </div>
 </details>
 <section class="card overall-card" id="overall-card" aria-labelledby="overall-title" hidden>
-<div class="overall-header"><h2 class="overall-heading" id="overall-title">Общий прогресс<span id="overall-caption">Все задания</span></h2><span class="download-badges"><span class="badge" id="overall-percent">0%</span><span class="badge new-files" id="overall-new-files" title="Сумма новых оригиналов и preview за текущие запуски всех заданий. Уже существующие файлы не учитываются.">Новых: 0</span></span></div>
+<div class="overall-header"><h2 class="overall-heading" id="overall-title">Общий прогресс<span id="overall-caption">Все задания</span></h2><span class="download-badges"><span class="badge" id="overall-percent">0%</span><span class="badge new-files" id="overall-new-files" title="Новые файлы с последнего общего повтора. «Повторить всё» и «Повторить все ошибки» обнуляют счётчик; пауза и продолжение сохраняют его. Уже существующие файлы не учитываются.">Новых: 0</span></span></div>
 <div class="overall-body" aria-live="polite">
 <div class="metrics"><div><strong id="overall-total">0</strong><span>найдено файлов</span></div><div><strong id="overall-originals">0</strong><span>оригиналов</span></div><div><strong id="overall-previews">0</strong><span>копий (preview)</span></div><div><strong id="overall-skipped">0</strong><span>пропущено</span></div><div><strong id="overall-failed">0</strong><span>ошибок</span></div></div>
 <progress id="overall-progress" value="0" max="1" aria-label="Общий прогресс всех заданий"></progress>

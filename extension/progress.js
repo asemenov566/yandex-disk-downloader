@@ -6,9 +6,10 @@ export function overallProgress(jobs) {
     if (job.running && job.phase === 'scanning') result.scanning++;
     result.pages += job.pages || 0;
     const counts = job.summary || job;
-    for (const key of ['total', 'done', 'skipped', 'failed', 'directoriesFailed', 'reused', 'originals', 'previews', 'newFiles']) {
+    for (const key of ['total', 'done', 'skipped', 'failed', 'directoriesFailed', 'reused', 'originals', 'previews']) {
       result[key] += counts[key] || 0;
     }
+    result.newFiles += job.overallNewFiles ?? counts.newFiles ?? 0;
   }
   // Count files, not an average of album percentages. Failed directories have
   // no known file count and must not inflate the progress numerator.

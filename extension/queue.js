@@ -1,5 +1,5 @@
 import { createRunner } from './runner.js';
-import { newJob, parseLink, reportAll } from './core.js';
+import { newJob, parseLink, reportAll, summary } from './core.js';
 import { waitFor } from './wait.js';
 import { createDownloadPool, DOWNLOAD_LIMITS } from './pool.js';
 import { DOWNLOAD_TIMEOUTS, DEFAULT_TIMEOUT_SECONDS } from './settings.js';
@@ -110,6 +110,8 @@ export function createQueue({ loadEntries, saveEntry, deleteEntry = async () => 
         queued: entry.wanted && !active.has(entry.id), phase: state.job.phase,
         done: state.job.summary.done, total: state.job.summary.total,
         summary: state.job.summary, pages: state.job.pages, current: state.current,
+        overallNewFiles: Math.max(0, state.job.summary.newFiles -
+          (Number.isSafeInteger(entry.overallNewFilesBaseline) && entry.overallNewFilesBaseline >= 0 ? entry.overallNewFilesBaseline : 0)),
         resumable: !entry.wanted && !active.has(entry.id) && !state.running &&
           (state.job.summary.pending > 0 || state.job.pendingDirectories > 0 || !!entry.suspendedRetry),
         completed: !entry.wanted && !active.has(entry.id) && !state.running && state.job.phase === 'done',
@@ -162,8 +164,16 @@ export function createQueue({ loadEntries, saveEntry, deleteEntry = async () => 
         (action === 'downloadAll' || item.summary.failed || item.summary.directoriesFailed ||
           (args.includePreviews === true && item.summary.previews)));
       if (targets.length) await prepareDownloads();
+      if (targets.length) {
+        // Start one common counting interval, including albums that keep running
+        // and those that are not eligible for retry. Keep their individual counts.
+        for (const entry of entries) entry.overallNewFilesBaseline = summary(entry.job).newFiles;
+        await Promise.all(entries.map(entry => saveEntry(entry)));
+      }
       for (const item of targets) {
         const entry = entries.find(e => e.id === item.id);
+        entry.overallNewFilesBaseline = 0;
+        entry.job.runNewFiles = 0;
         if (action === 'downloadAll') {
           const previous = entry.job;
           entry.job = newJob(previous.publicUrl + (previous.path === '/' ? '' : previous.path), previous.mode,
@@ -201,7 +211,8 @@ export function createQueue({ loadEntries, saveEntry, deleteEntry = async () => 
       if (!entry) {
         entry = entries.find(e => e.job.publicUrl === job.publicUrl && e.job.path === job.path);
         if (entry) {
-          runners.delete(entry.id); entry.job = job; entry.wanted = true; entry.action = 'start'; delete entry.error; delete entry.suspendedRetry;
+          runners.delete(entry.id); entry.job = job; entry.overallNewFilesBaseline = 0;
+          entry.wanted = true; entry.action = 'start'; delete entry.error; delete entry.suspendedRetry;
         } else { entry = { id: crypto.randomUUID(), job, wanted: true, action: 'start' }; entries.push(entry); }
         await saveEntry(entry); await runnerFor(entry).ready;
       }
@@ -231,6 +242,7 @@ export function createQueue({ loadEntries, saveEntry, deleteEntry = async () => 
       if (!active.has(entry.id)) {
         entry.wanted = true; entry.action = action === 'start' && entry.suspendedRetry ? 'retry' : action;
         entry.actionArgs = action === 'retry' ? { includePreviews: args.includePreviews === true } : entry.suspendedRetry || {};
+        if (entry.action === 'retry') { entry.job.runNewFiles = 0; entry.overallNewFilesBaseline = 0; }
         delete entry.suspendedRetry;
       }
     } else if (action === 'report') await runnerFor(entry).command(action);
