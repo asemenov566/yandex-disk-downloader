@@ -1,70 +1,85 @@
 <!doctype html>
-<html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Загрузчик Яндекс Диска</title><link rel="stylesheet" href="app.css"></head>
+<html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Загрузчик Яндекс Диска и ВК</title><link rel="stylesheet" href="app.css"></head>
 <body><main>
-<header><img class="mark" src="icons/icon-128.png" width="40" height="40" alt=""><div class="brand"><h1>Загрузчик Яндекс Диска</h1><p>Файлы и папки из нескольких альбомов</p></div><div class="header-tools"><div class="settings-tools"><button id="settings-open" class="gear" type="button" title="Настройки" aria-label="Настройки" aria-haspopup="dialog">⚙</button><span class="version">1.3.11</span></div></div></header>
+<header><img class="mark" src="icons/icon-128.png" width="40" height="40" alt=""><div class="brand"><h1>Загрузчик Яндекс Диска и ВК</h1><p>Яндекс Диск · фото и видео диалогов ВК</p></div><div class="header-tools"><nav class="window-actions" aria-label="Открыть расширение отдельно"><button id="open-window" title="Открыть отдельное окно" class="secondary">Окно</button><button id="open-tab" title="Открыть отдельную вкладку" class="secondary">Вкладка</button></nav><div class="settings-tools"><button id="settings-open" class="gear" type="button" title="Настройки" aria-label="Настройки" aria-haspopup="dialog">⚙</button><span class="version">1.5.4</span></div></div></header>
 <details class="card source-card" id="source-card" open>
-<summary id="source-heading">Публичная ссылка на альбом или папку</summary>
+<summary id="source-heading">Ссылка Яндекс Диска или диалога ВК</summary>
 <div class="source-body">
-<div class="input-row"><input id="link" type="url" aria-labelledby="source-heading" placeholder="https://disk.yandex.ru/d/…" autocomplete="off"><button id="scan">Скачать всё</button></div>
+<div class="input-row"><input id="link" type="url" aria-labelledby="source-heading" placeholder="Яндекс Диск или https://vk.ru/im/convo/…" autocomplete="off"><button id="scan">Скачать всё</button></div>
 <div class="destination"><b>Сохраняем в</b><p id="destination">Выбранная папка / yandex-disk / название альбома</p></div>
-<p id="folder-warning" class="hint">При первом скачивании выберите папку. Внутри создадим yandex-disk или используем уже существующую.</p>
+<p id="folder-warning" class="hint">При первом скачивании выберите папку. Для Яндекса создадим yandex-disk, для ВК — vk-messager.</p>
 <label for="mode" class="sr-only">Режим скачивания</label>
-<select id="mode"><option value="auto">Оригиналы с заменой недоступных фото копиями</option><option value="original">Только оригиналы</option></select>
+<select id="mode"><option value="auto">Видео и фото: оригиналы, копии если нет оригинала</option><option value="original">Видео и фото: только оригиналы</option><option value="photos-auto">Только фото: оригиналы, копии если нет оригинала</option><option value="photos-original">Только фото: только оригиналы</option><option value="videos">Только видео</option></select>
 <label class="check-row" title="Если на Яндекс Диске есть два одинаковых файла, при установленном флажке будут скачаны оба. Снимите флажок, чтобы сохранять одну копию одинаковых файлов внутри каждой папки. Уже скачанный файл повторно не загружается в любом случае."><input type="checkbox" id="download-all" checked aria-describedby="duplicates-hint">Скачивать все без проверки дублей</label>
 <span id="duplicates-hint" class="sr-only">Если на Яндекс Диске есть два одинаковых файла, при установленном флажке будут скачаны оба. Снимите флажок, чтобы сохранять одну копию одинаковых файлов внутри каждой папки. Уже скачанный файл повторно не загружается в любом случае.</span>
-<details class="hint"><summary>Качество и структура папок</summary><p>Сначала скачиваем фотографии из всех подпапок, затем видео, документы и остальные файлы. Видео и документы скачиваются в оригинале. При новом запуске проверяем сохранённое и пробуем заменить превью оригиналом.</p></details>
+<details class="hint"><summary>Качество и структура папок</summary><p>Режим можно менять во время загрузки: текущие передачи задания остановятся, подходящие файлы автоматически продолжатся. После завершения выберите нужный режим и нажмите «Продолжить» или «Продолжить все».</p><p>Сначала скачиваем фотографии из всех подпапок, затем видео, документы и остальные файлы. Видео и документы скачиваются в оригинале. При новом запуске проверяем сохранённое и пробуем заменить превью оригиналом.</p><p>ВК: откройте диалог и войдите в аккаунт, ссылку подставим автоматически. Вставленная ссылка откроет диалог. Собираем и сохраняем список вложений порциями по 30 с настраиваемой паузой, независимо от скачивания. Найденные фото и видео сразу поступают в очередь и скачиваются параллельно в vk-messager / название диалога. Сохранённые ссылки обновляем, если они стали недоступны. Видео: только MP4 с серверов ВК, если название содержит «Видео от», независимо от имени автора. Внешние хостинги и другие названия пропускаются. Вкладку диалога оставьте открытой. При засыпании вкладки или истечении токена автоматически обновим её и повторим запрос с сохранённой позиции. Если потребуется заново войти в аккаунт, покажем сообщение.</p></details>
 </div>
 </details>
-<section class="card overall-card" id="overall-card" aria-labelledby="overall-title" hidden>
-<div class="overall-header"><h2 class="overall-heading" id="overall-title">Общий прогресс<span id="overall-caption">Все задания</span></h2><span class="download-badges"><span class="badge" id="overall-percent">0%</span><span class="badge new-files" id="overall-new-files" title="Новые файлы с последнего общего повтора. «Повторить всё» и «Повторить все ошибки» обнуляют счётчик; пауза и продолжение сохраняют его. Уже существующие файлы не учитываются.">Новых: 0</span></span></div>
+<details class="card overall-card" id="overall-card" aria-labelledby="overall-title" open hidden>
+<summary class="overall-header"><h2 class="overall-heading" id="overall-title">Общий прогресс<span id="overall-caption">Все задания</span></h2><span class="download-badges"><span class="badge" id="overall-percent">0%</span><span class="badge new-files" id="overall-new-files" title="Новые файлы с последнего общего повтора. «Повторить» и «Повторить ошибки» обнуляют счётчик; пауза и продолжение сохраняют его. Уже существующие файлы не учитываются.">Новых: 0</span></span></summary>
 <div class="overall-body" aria-live="polite">
 <div class="metrics"><div><strong id="overall-total">0</strong><span>найдено файлов</span></div><div><strong id="overall-originals">0</strong><span>оригиналов</span></div><div><strong id="overall-previews">0</strong><span>копий (preview)</span></div><div><strong id="overall-skipped">0</strong><span>пропущено</span></div><div><strong id="overall-failed">0</strong><span>ошибок</span></div></div>
 <progress id="overall-progress" value="0" max="1" aria-label="Общий прогресс всех заданий"></progress>
+<p id="overall-time" class="hint" title="Общее активное время без двойного учёта одновременных заданий. Оценка остатка приблизительная."></p>
 <p class="hint" id="overall-detail"></p>
 <p class="hint" id="overall-scope">Сумма всех заданий в списке, включая завершённые и приостановленные.</p>
-<ul class="overall-current" id="overall-current"></ul>
-<details class="issues overall-issues" id="overall-issues" hidden><summary>Ошибки и пропуски всех заданий · <span id="overall-issues-count">0</span></summary><p class="hint" id="overall-issues-loading">Откройте список, чтобы увидеть полный путь и причину.</p><ul id="overall-issues-list"></ul></details>
+<ul class="overall-current" id="overall-current" hidden></ul>
+<section id="overall-issues-section" class="list-section" hidden><button id="overall-issues-open" type="button" class="secondary list-open">Открыть все ошибки и пропуски</button><details class="issues overall-issues" id="overall-issues" hidden><summary>Ошибки и пропуски всех заданий · <span id="overall-issues-count">0</span></summary><p class="hint" id="overall-issues-loading">Откройте список, чтобы увидеть полный путь и причину.</p><ul id="overall-issues-list"></ul></details></section>
 <div class="actions bulk-actions" aria-label="Действия для всех заданий">
-<button id="resume-all" type="button">Продолжить все</button>
-<button id="pause-all" class="secondary" type="button">Приостановить все</button>
-<button id="stop-all" class="secondary" type="button">Остановить все</button>
-<span id="retry-all-controls" class="retry-controls"><button id="retry-all" class="secondary" type="button" title="Повторить ошибки всех завершённых заданий по сохранённым спискам">Повторить все ошибки</button><label class="check-row"><input id="retry-all-previews" type="checkbox" title="При общем повторе ошибок также пробовать оригиналы для сохранённых preview">Считать preview ошибкой</label></span>
-<button id="report-all" class="text-button" type="button">Отчёт по всем</button>
+<button id="resume-all" type="button">Продолжить</button>
+<button id="pause-all" class="secondary" type="button">Приостановить</button>
+<button id="stop-all" class="secondary" type="button">Остановить</button>
+<button id="retry-all" class="secondary" type="button" title="Повторить ошибки завершённых сессий; preview учитываются по галочке в блоке «Сессии»">Повторить ошибки</button>
+<button id="download-completed" class="secondary" type="button" hidden title="Заново проверить завершённые сессии и скачать недостающее">Повторить</button>
+<button id="report-all" class="text-button" type="button">Отчёт</button>
 </div>
-<div class="actions bulk-extra"><button id="download-completed" class="secondary" type="button" hidden title="Заново проверить все завершённые альбомы и скачать недостающее. Существующие файлы не дублируются.">Повторить всё</button></div>
-<section class="queue-card" id="queue-card" hidden><label for="jobs">Задания · независимые загрузки</label><select id="jobs" aria-label="Выбрать задание"></select></section>
+
+
 </div>
-</section>
+</details>
+<section class="card sessions-card" id="sessions-card" hidden aria-labelledby="sessions-title">
+<div class="sessions-heading"><h2 id="sessions-title">Сессии</h2><label class="check-row"><input type="checkbox" id="sessions-retry-previews" checked>Считать preview ошибкой</label></div>
+<p id="sessions-message" class="message" role="status"></p>
+<div id="sessions-list" class="sessions-list" role="list" aria-label="Прогресс и управление сессиями"></div></section>
 <details class="card download-card" id="download-card" open>
 <summary class="status-head" id="download-heading" tabindex="-1"><span id="album">Загрузка — укажите ссылку</span><span class="download-badges"><span class="badge" id="job-percent" title="Обработано файлов выбранного задания">0%</span><span class="badge new-files" id="new-files" title="Новые оригиналы и preview, сохранённые за текущий запуск. Уже существующие файлы не учитываются.">Новых: 0</span></span></summary>
 <div class="download-body" aria-live="polite">
 <div class="metrics"><div><strong id="total">0</strong><span>найдено файлов</span></div><div><strong id="originals">0</strong><span>оригиналов</span></div><div><strong id="previews">0</strong><span>копий (preview)</span></div><div><strong id="skipped">0</strong><span>пропущено</span></div><div><strong id="failed">0</strong><span>ошибок</span></div></div>
-<progress id="progress" value="0" max="1"></progress>
+<progress id="progress" value="0" max="1" aria-label="Прогресс выбранного задания"></progress>
+<p id="download-time" class="hint" title="Время работы без пауз. Остаток оценивается по скорости сохранения файлов; для ВК список может быть неполным."></p>
 <p id="detail" class="hint">Список будет прочитан полностью, включая вложенные папки.</p>
 <p id="current" class="current"></p>
-<div class="actions"><button id="start" disabled>Продолжить</button><button id="pause" class="secondary" disabled>Пауза</button><button id="stop" class="secondary" disabled>Стоп</button><span class="retry-controls"><button id="retry" class="secondary" disabled>Повторить ошибки</button><label class="check-row" title="Только при повторе ошибок: попробовать оригиналы для уже найденных preview без повторного обхода альбома."><input type="checkbox" id="retry-previews">Считать preview ошибкой</label></span><button id="report" class="text-button" disabled>Отчёт</button></div>
+<section class="list-section"><button id="active-files-open" type="button" class="secondary list-open">Показать все скачивания</button><details id="active-files" class="issues"><summary>Текущие скачивания · <span id="active-files-count">0</span></summary><ul id="active-files-list" class="overall-current"></ul><p id="active-files-empty" class="hint">Сейчас нет скачиваемых файлов.</p></details></section>
+<div class="actions"><button id="start" disabled>Продолжить</button><button id="pause" class="secondary" disabled>Пауза</button><button id="stop" class="secondary" disabled>Стоп</button><span class="retry-controls"><button id="retry" class="secondary" disabled>Повторить ошибки</button><label class="check-row" title="Только при повторе ошибок: попробовать оригиналы для уже найденных preview без повторного обхода альбома."><input type="checkbox" id="retry-previews" checked>Считать preview ошибкой</label></span><button id="report" class="text-button" disabled>Отчёт</button></div>
+<div class="actions bulk-extra"><button id="restart-job" type="button" class="secondary" title="Заново прочитать список файлов этой сессии и скачать недостающее">Повторить с нуля</button></div>
 <p id="message" class="message" role="status"></p>
-<details class="issues" id="issues-card" hidden><summary>Пропуски и ошибки</summary><ul id="issues"></ul></details>
+<section id="issues-section" class="list-section" hidden><button id="issues-open" type="button" class="secondary list-open">Открыть все ошибки и пропуски</button><details class="issues" id="issues-card" hidden><summary>Пропуски и ошибки</summary><ul id="issues"></ul></details></section>
 </div>
 </details>
-<footer><span class="dot"></span> Попап можно закрыть — загрузка продолжится в фоне.</footer>
+<footer><span class="dot"></span> Попап можно закрыть. Для ВК оставьте вкладку диалога открытой.</footer>
 </main><dialog id="settings" aria-labelledby="settings-title">
 <div class="dialog-heading"><h2 id="settings-title">Настройки</h2><form method="dialog"><button class="text-button" aria-label="Закрыть настройки" title="Закрыть">×</button></form></div>
-<div class="settings-grid"><div><label for="download-limit">Одновременных скачиваний</label>
-<select id="download-limit"><option value="1">1</option><option value="5">5</option><option value="10">10</option><option value="15">15</option><option value="20">20</option><option value="25">25</option><option value="30">30</option><option value="35">35</option><option value="40">40</option><option value="45">45</option><option value="50">50</option></select>
-</div><div><label for="download-timeout">Ожидание данных</label><select id="download-timeout"><option value="5">5 секунд</option><option value="15">15 секунд</option><option value="25" selected>25 секунд</option><option value="40">40 секунд</option><option value="60">60 секунд</option><option value="120">120 секунд</option><option value="240">240 секунд</option></select></div></div><p class="hint">Лимит файлов меняется сразу. Время ожидания без новых данных — для следующих файлов.</p>
+<div class="settings-grid"><div><label for="download-limit">[YD] Файлов на задание</label>
+<select id="download-limit"><option value="1">1</option><option value="5">5</option><option value="10">10</option><option value="15">15</option><option value="20">20</option><option value="25">25</option><option value="30">30</option><option value="35">35</option><option value="40">40</option><option value="45">45</option><option value="50" selected>50</option><option value="70">70</option><option value="100">100</option><option value="150">150</option><option value="200">200</option></select>
+</div><div><label for="vk-download-limit">[VK] Фото + видео на диалог</label><select id="vk-download-limit"><option value="1">1</option><option value="5">4+1</option><option value="10">8+2</option><option value="16">12+4</option><option value="30" selected>20+10</option><option value="40">25+15</option><option value="80">50+30</option><option value="110">70+40</option><option value="150">100+50</option><option value="220">150+70</option><option value="300">200+100</option></select></div><div><label for="download-timeout">Ожидание данных</label><select id="download-timeout"><option value="5">5 секунд</option><option value="15">15 секунд</option><option value="25" selected>25 секунд</option><option value="40">40 секунд</option><option value="60">60 секунд</option><option value="120">120 секунд</option><option value="240">240 секунд</option></select></div><div><label for="completion-repeats">Повторы после завершения</label><select id="completion-repeats"><option value="0">0</option><option value="1">1</option><option value="2">2</option><option value="3">3</option></select></div></div><p class="hint">Каждое задание получает свой лимит. ВК: фото + видео; «1» — один файл всего. В режиме одного типа используется только его часть лимита. Лимиты меняются сразу; время ожидания — для следующих файлов.</p>
+<label for="vk-page-delay">Пауза между порциями ВК</label><select id="vk-page-delay"><option value="1" selected>1 сек.</option><option value="2">2 сек.</option><option value="3">3 сек.</option><option value="4">4 сек.</option><option value="5">5 сек.</option><option value="6">6 сек.</option><option value="7">7 сек.</option><option value="8">8 сек.</option><option value="9">9 сек.</option><option value="10">10 сек.</option></select><p class="hint">Применяется со следующей порции. Ожидание общей очереди запросов ВК может увеличить интервал.</p>
 <p id="active-downloads" class="hint" role="status"></p>
+<button id="reload-vk-tabs" type="button" class="secondary">Обновить все вкладки ВК</button><p id="reload-vk-result" class="hint" role="status"></p>
+<h3>Диагностика</h3><label class="check-row"><input type="checkbox" id="logging">Логирование</label><p class="hint">Журнал log--дд-мм-гггг.log рядом с downloader-state.json в папке yandex-disk. Записывается каждые 5 секунд, для каждого дня — отдельный файл. В базе браузера журнал не хранится. Токены, ссылки на файлы и содержимое переписки не записываются.</p><div class="actions"><button id="export-log" type="button" class="secondary">Скачать копию лога</button><button id="clear-log" type="button" class="text-button">Очистить лог за сегодня</button></div><p id="log-status" class="hint" role="status"></p>
 <h3>Папка скачивания</h3>
-<p class="hint">Сохраняем в yandex-disk. Смена папки остановит все задания; продолжение — вручную.</p>
+<p class="hint">Сохраняем в yandex-disk или vk-messager. Смена папки остановит все задания; продолжение — вручную.</p>
 <p id="folder-status" class="hint" role="status">Папка не выбрана.</p>
 <button id="choose-folder" class="secondary" type="button">Выбрать папку</button>
 <button id="allow-folder" class="secondary" type="button" hidden>Разрешить доступ</button>
-<p class="hint">База: yandex-disk/downloader-state.json</p>
+<p class="hint">Общая база заданий: yandex-disk/downloader-state.json</p>
 <h3>Страницы для скачивания</h3>
 <p class="hint">Удаление останавливает задание и убирает его из списка. Скачанные файлы и история сохраняются.</p>
 <ul id="settings-jobs" class="settings-jobs"></ul>
 <p id="settings-empty" class="hint">Заданий пока нет.</p>
 <p id="settings-message" class="message" role="status"></p>
-<nav class="window-actions" aria-label="Открыть расширение отдельно"><button id="open-window" class="secondary">Открыть окно</button><button id="open-tab" class="secondary">Открыть вкладку</button></nav>
+
 </dialog>
+<dialog id="session-dialog" aria-labelledby="session-dialog-title"><div class="dialog-heading"><h2 id="session-dialog-title">Сессия</h2><form method="dialog"><button class="text-button" aria-label="Закрыть сессию" title="Закрыть">×</button></form></div></dialog>
+<dialog id="diagnostics-dialog" aria-label="Ошибки и пропуски"><iframe id="diagnostics-frame" title="Список ошибок и пропусков"></iframe></dialog>
+<dialog id="transfers-dialog" aria-labelledby="transfers-title"><div class="dialog-heading"><h2 id="transfers-title">Текущие скачивания</h2><form method="dialog"><button class="text-button" aria-label="Закрыть текущие скачивания" title="Закрыть">×</button></form></div><p id="transfers-caption" class="hint"></p><div id="transfers-scroll"><ul id="transfers-list" class="transfer-list"></ul><p id="transfers-empty" class="hint">Сейчас нет скачиваемых файлов.</p></div></dialog>
 <script type="module" src="app.js"></script></body></html>

@@ -25,10 +25,11 @@ export async function getPhoto(job, file, kind, signal) {
   return new Blob([png], {type:'image/png'});
 }
 export async function originalUrl() { throw new Error('No remote downloads in this test'); }
+export async function fetchPhoto() { throw new Error('No VK requests in this isolated UI test'); }
 `);
 const context = await chromium.launchPersistentContext(path.join(root, 'profile'), {
   executablePath: process.env.CHROMIUM_PATH,
-  headless: true, viewport: { width: 600, height: 600 },
+  headless: true, viewport: { width: 780, height: 600 },
   args: [`--disable-extensions-except=${extension}`, `--load-extension=${extension}`],
   ignoreDefaultArgs: ['--disable-background-timer-throttling', '--disable-renderer-backgrounding', '--disable-backgrounding-occluded-windows'],
   acceptDownloads: true
@@ -84,6 +85,9 @@ try {
   await cdp.send('Browser.setDownloadBehavior', { behavior: 'allow', downloadPath: downloads });
   await page.goto('chrome-extension://' + id + '/app.html');
   await page.waitForFunction(() => document.getElementById('active-downloads').textContent.length > 0);
+  assert.deepEqual(await page.locator('#mode option').evaluateAll(options => options.map(option => option.value)),
+    ['auto', 'original', 'photos-auto', 'photos-original', 'videos']);
+  assert.deepEqual(await page.locator('#vk-download-limit option').allTextContents(), ['1', '4+1', '8+2', '12+4', '20+10', '25+15', '50+30', '70+40', '100+50', '150+70', '200+100']);
   const command = (action, args = {}) => page.evaluate(async ({ action, args }) => {
     const result = await chrome.runtime.sendMessage({ target: 'background', type: 'command', action, args });
     if (!result.ok) throw new Error(result.error); return result.value;
@@ -113,16 +117,15 @@ try {
   await page.evaluate(() => { window.cancelPicker = false; });
   await page.locator('#scan').click();
   await page.waitForFunction(() => document.getElementById('folder-warning').hidden && document.getElementById('album').textContent === 'Загрузка — AlbumA');
-  assert.equal(await page.locator('#overall-card').isHidden(), true);
-  assert.equal(await page.locator('#source-card').evaluate(el => el.open), false);
-  await page.locator('#source-heading').click();
-  await page.locator('#retry-previews').check(); // re-render without changing the job count
+  assert.equal(await page.locator('#overall-card').isVisible(), true);
   assert.equal(await page.locator('#source-card').evaluate(el => el.open), true);
-  await page.locator('#retry-previews').uncheck();
   await page.locator('#source-heading').click();
-  assert.equal(await page.locator('#queue-card').isHidden(), true);
-  await page.locator('#download-heading').click();
-  assert.equal(await page.locator('#download-card').evaluate(el => el.open), true);
+  await page.locator('#sessions-retry-previews').uncheck(); // re-render without changing the job count
+  assert.equal(await page.locator('#source-card').evaluate(el => el.open), false);
+  await page.locator('#sessions-retry-previews').check();
+  await page.locator('#source-heading').click();
+  assert.equal(await page.locator('.session-row').count(), 1);
+  assert.equal(await page.locator('#download-card').isHidden(), true);
   await page.screenshot({ path: path.join(root, 'single-job.png') });
   assert.equal(context.pages().length, pagesBeforePicker);
   const a = await command('status');
@@ -134,39 +137,59 @@ try {
   await page.waitForFunction(() => !document.getElementById('download-limit').disabled);
   assert.equal((await command('status')).downloadLimit, 5);
   await page.keyboard.press('Escape');
+  await command('settings', { logging: true });
   const b = await command('scan', { link: 'https://disk.yandex.ru/d/AlbumB' });
   for (let n = 0; n < 100; n++) {
     if ((await command('status')).jobs.every(j => !j.running && !j.queued)) break;
     await new Promise(resolve => setTimeout(resolve, 100));
   }
   const complete = await command('status', { id: a.id });
+  const debugLog = (await command('exportLog')).text.trim().split('\n').map(line => JSON.parse(line));
+  assert(debugLog.some(row => row.event === 'file.end'));
+  assert(debugLog.some(row => row.event === 'state.save.end'));
+  assert(!JSON.stringify(debugLog).includes('https://'));
+  assert.equal((await command('status')).logging, true);
+  const logOnDisk = await page.evaluate(async () => {
+    const { loadDownloadFolder, db } = await import('./storage.js');
+    const { logFileName } = await import('./logging.js');
+    const dir = await (await loadDownloadFolder()).getDirectoryHandle('yandex-disk');
+    const text = await (await (await dir.getFileHandle(logFileName())).getFile()).text();
+    const database = await db();
+    const legacy = await new Promise((resolve, reject) => {
+      const request = database.transaction('jobs').objectStore('jobs').get('debug-log');
+      request.onsuccess = () => resolve(request.result); request.onerror = () => reject(request.error);
+    });
+    return { text, legacy };
+  });
+  assert(logOnDisk.text.includes('file.end')); assert.equal(logOnDisk.legacy, undefined);
+  await command('settings', { logging: false });
   console.log(JSON.stringify({ summary: complete.job.summary, issues: complete.job.issues, notice: complete.notice }));
   assert.equal(complete.job.summary.originals, 5); assert.equal(complete.job.summary.previews, 1);
   assert.equal(complete.job.summary.newFiles, 6);
   await page.reload();
   await page.waitForFunction(() => document.getElementById('originals').textContent === '5');
   assert.equal(await page.locator('#source-card').evaluate(el => el.open), false);
+  await page.locator('#source-heading').click(); // Manual expansion remains available for an existing source.
   assert.equal(await page.locator('#previews').textContent(), '1');
   assert.equal(await page.locator('#job-percent').textContent(), '100%');
   assert.equal(await page.locator('#new-files').textContent(), 'Новых: 6');
   assert.equal(await page.locator('#overall-new-files').textContent(), 'Новых: 12');
   await page.screenshot({ path: path.join(root, 'current-run-badges.png') });
   assert.equal(await page.locator('#overall-card').isVisible(), true);
-  assert.equal(await page.locator('#overall-card').evaluate(el => el.tagName), 'SECTION');
-  assert.equal(await page.locator('#download-card').evaluate(el => el.open), false);
-  assert.equal(await page.locator('#overall-card #jobs').count(), 1);
+  assert.equal(await page.locator('#overall-card').evaluate(el => el.tagName), 'DETAILS');
+  assert.equal(await page.locator('#download-card').isHidden(), true);
+  assert.equal(await page.locator('.session-row').count(), 2);
+  assert.equal(await page.locator('#jobs').count(), 0);
   assert(await page.locator('#link').evaluate(el => !!(el.compareDocumentPosition(document.getElementById('overall-card')) & Node.DOCUMENT_POSITION_FOLLOWING)));
-  await page.locator('#download-heading').click();
-  assert.equal(await page.locator('#download-card').evaluate(el => el.open), true);
+  assert.equal(await page.locator('#download-card').isHidden(), true);
   await command('status');
-  await page.locator('#retry-all-previews').check(); // triggers a render, which must preserve expansion
-  assert.equal(await page.locator('#download-card').evaluate(el => el.open), true);
-  await page.locator('#retry-all-previews').uncheck();
-  await page.locator('#download-heading').click();
-  assert.equal(await page.locator('#download-card').evaluate(el => el.open), false);
+  await page.locator('#sessions-retry-previews').check(); // triggers a render, which must preserve expansion
+  assert.equal(await page.locator('#download-card').isHidden(), true);
+  await page.locator('#sessions-retry-previews').uncheck();
+  assert.equal(await page.locator('#download-card').isHidden(), true);
   assert.equal(await page.locator('#download-completed').isVisible(), true);
   assert.equal(await page.locator('#retry-all').isDisabled(), true);
-  await page.locator('#retry-all-previews').check();
+  await page.locator('#sessions-retry-previews').check();
   await page.locator('#retry-all').click();
   await page.waitForFunction(() => !document.getElementById('scan').disabled);
   for (let n = 0; n < 100; n++) {
@@ -188,18 +211,32 @@ try {
   await page.waitForFunction(() => document.getElementById('new-files').textContent === 'Новых: 0' && document.getElementById('job-percent').textContent === '100%');
   assert.equal(await page.locator('#overall-new-files').textContent(), 'Новых: 0');
   assert.equal(await page.locator('#job-percent').textContent(), '100%');
+  assert.equal(await page.locator('.session-row').count(), 2);
+  assert.equal(await page.locator('.session-row').first().locator('.session-done').textContent(), '6');
+  assert.match(await page.locator('#download-time').textContent(), /Время работы:/);
+  assert.match(await page.locator('#overall-time').textContent(), /Время работы:/);
+  await page.locator('#mode').selectOption('photos-original');
+  await page.waitForFunction(() => !document.getElementById('mode').disabled);
+  assert.equal((await command('status')).job.mode, 'photos-original');
+  await page.locator('#mode').selectOption('auto');
+  await page.waitForFunction(() => !document.getElementById('mode').disabled);
+  assert.equal((await command('status')).job.mode, 'auto');
   await page.screenshot({ path: path.join(root, 'main.png') });
   await page.locator('#settings-open').click();
   assert.equal(await page.locator('#download-timeout').inputValue(), '120');
   const checkSettingsColumns = async () => {
     const left = await page.locator('#download-limit').boundingBox();
-    const right = await page.locator('#download-timeout').boundingBox();
+    const right = await page.locator('#vk-download-limit').boundingBox();
     assert(Math.abs(left.width - right.width) <= 1);
     assert(Math.abs(left.y - right.y) <= 1);
     assert(left.x + left.width < right.x);
   };
   await checkSettingsColumns();
+  await page.locator('#vk-download-limit').selectOption('30');
+  await page.waitForFunction(() => !document.getElementById('vk-download-limit').disabled);
+  assert.equal((await command('status')).vkDownloadLimit, 30);
   await page.screenshot({ path: path.join(root, 'settings.png') });
+  await page.getByRole('button', { name: 'Закрыть настройки' }).click();
   for (const view of ['tab', 'window']) {
     const expectedSource = await page.locator('#link').inputValue();
     const opened = context.waitForEvent('page');
@@ -209,18 +246,19 @@ try {
     await other.waitForFunction(source => document.getElementById('link').value === source, expectedSource);
     await other.close();
   }
+  await page.locator('#settings-open').click();
   await page.setViewportSize({ width: 360, height: 600 });
   await page.evaluate(() => document.documentElement.classList.add('detached'));
   assert(await page.locator('#settings').evaluate(el => el.scrollWidth <= el.clientWidth));
   await checkSettingsColumns();
   await page.screenshot({ path: path.join(root, 'settings-narrow.png') });
-  await page.setViewportSize({ width: 600, height: 600 });
-  await page.getByRole('button', { name: 'Удалить задание AlbumA', exact: true }).click();
+  await page.setViewportSize({ width: 780, height: 600 });
+  await page.getByRole('button', { name: 'Удалить задание [YD] AlbumA', exact: true }).click();
   await page.waitForFunction(() => document.querySelectorAll('#settings-jobs li').length === 1);
   assert.equal((await command('status')).jobs.length, 1);
-  assert.equal(await page.locator('#overall-card').isHidden(), true);
-  assert.equal(await page.locator('#download-card').evaluate(el => el.open), true);
-  await page.getByRole('button', { name: 'Удалить задание AlbumB', exact: true }).click();
+  assert.equal(await page.locator('#overall-card').isVisible(), true);
+  assert.equal(await page.locator('#download-card').isHidden(), true);
+  await page.getByRole('button', { name: 'Удалить задание [YD] AlbumB', exact: true }).click();
   await page.waitForFunction(() => document.querySelectorAll('#settings-jobs li').length === 0);
   assert.equal(await page.locator('#source-card').evaluate(el => el.open), true);
   await page.keyboard.press('Escape');
@@ -281,7 +319,7 @@ try {
   // handle, never reopen the directory chooser or the settings dialog.
   await page.evaluate(() => { window.testFolderPermission = 'prompt'; window.dispatchEvent(new Event('focus')); });
   await page.waitForFunction(() => document.getElementById('folder-status').textContent.includes('требуется разрешение'));
-  await page.locator('#source-heading').click();
+  if (!await page.locator('#source-card').evaluate(el => el.open)) await page.locator('#source-heading').click();
   await page.locator('#scan').click();
   await page.waitForFunction(() => document.getElementById('folder-warning').hidden && !document.getElementById('scan').disabled);
   assert.equal(await page.evaluate(() => window.permissionCalls), 1);
@@ -327,7 +365,7 @@ try {
   for (const id of ['stop-all', 'resume-all', 'pause-all', 'report-all', 'download-completed', 'retry-all']) {
     assert.equal(await page.locator('#overall-card #' + id).count(), 1);
   }
-  assert.equal(await page.locator('#download-completed').textContent(), 'Повторить всё');
+  assert.equal(await page.locator('#download-completed').textContent(), 'Повторить');
   assert(await page.evaluate(() => ['resume-all', 'pause-all', 'stop-all', 'retry-all', 'report-all'].every((id, n) => {
     const top = getComputedStyle(document.getElementById(id));
     const bottom = getComputedStyle(document.getElementById(['start', 'pause', 'stop', 'retry', 'report'][n]));
@@ -341,8 +379,8 @@ try {
   await page.screenshot({ path: path.join(root, 'bulk-actions-narrow.png') });
   assert(await page.locator('header').evaluate(el => el.scrollWidth <= el.clientWidth));
   assert(await page.locator('#overall-card').evaluate(el => el.scrollWidth <= el.clientWidth));
-  assert(await page.locator('#download-card').evaluate(el => el.scrollWidth <= el.clientWidth));
-  await page.setViewportSize({ width: 600, height: 600 });
+  assert(await page.locator('#sessions-card').evaluate(el => el.scrollWidth <= el.clientWidth));
+  await page.setViewportSize({ width: 780, height: 600 });
   await page.locator('#settings-open').click();
   assert.equal(await page.locator('#choose-folder').isDisabled(), false);
   await page.evaluate(() => { window.cancelPicker = true; });

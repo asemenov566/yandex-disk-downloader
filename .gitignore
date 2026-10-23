@@ -6,3 +6,10 @@ Thumbs.db
 *.log
 test-output/
 assets/icon-source.png
+
+# Local user state and diagnostic captures
+downloader-state*.json
+*.har
+*.dmp
+.env
+.env.*

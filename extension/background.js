@@ -1,3 +1,5 @@
+import { handleVkRequest } from './vk-browser.js';
+import { vkVideoUrl } from './vk.js';
 let creating;
 const activityAlarm = 'download-activity';
 let powerUpdates = Promise.resolve();
@@ -46,6 +48,10 @@ async function ensureRunner() {
 chrome.runtime.onMessage.addListener((message, sender, respond) => {
   if (sender.id !== chrome.runtime.id || message.target !== 'background') return;
   (async () => {
+    if (message.type === 'vk-api') {
+      if (sender.url !== chrome.runtime.getURL('offscreen.html')) throw new Error('Недопустимый отправитель.');
+      return handleVkRequest(message);
+    }
     if (message.type === 'activity' || message.type === 'delay') {
       if (sender.url !== chrome.runtime.getURL('offscreen.html')) throw new Error('Недопустимый отправитель.');
       if (message.type === 'activity') return setActivity(message.active === true);
@@ -57,7 +63,11 @@ chrome.runtime.onMessage.addListener((message, sender, respond) => {
       if (message.method === 'download') {
         const url = new URL(message.args.url);
         const blob = message.args.url.startsWith('blob:' + chrome.runtime.getURL(''));
-        const remote = url.protocol === 'https:' && (url.hostname === 'downloader.disk.yandex.ru' || url.hostname.endsWith('.storage.yandex.net'));
+        let video = false;
+        if (message.args.filename?.startsWith('vk-messager/') && message.args.filename.endsWith('.mp4')) {
+          try { video = !!vkVideoUrl(url.href); } catch { /* Not a VK media host. */ }
+        }
+        const remote = video || url.protocol === 'https:' && (url.hostname === 'downloader.disk.yandex.ru' || url.hostname.endsWith('.storage.yandex.net'));
         if (!blob && !remote) throw new Error('Недопустимый адрес файла.');
         return chrome.downloads.download(message.args);
       }

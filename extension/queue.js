@@ -1,15 +1,21 @@
+import { trace, setLogging, logStatus, exportLog, clearLog, errorInfo } from './logging.js';
 import { createRunner } from './runner.js';
 import { newJob, parseLink, reportAll, summary } from './core.js';
 import { waitFor } from './wait.js';
-import { createDownloadPool, DOWNLOAD_LIMITS } from './pool.js';
-import { DOWNLOAD_TIMEOUTS, DEFAULT_TIMEOUT_SECONDS } from './settings.js';
+import { createDownloadPool, createVkDownloadPool, DOWNLOAD_LIMITS, VK_DOWNLOAD_LIMITS } from './pool.js';
+import { DOWNLOAD_TIMEOUTS, DEFAULT_TIMEOUT_SECONDS, VK_PAGE_DELAYS, DEFAULT_VK_PAGE_DELAY_SECONDS } from './settings.js';
+import { DOWNLOAD_MODES } from './modes.js';
 
 export function createQueue({ loadEntries, saveEntry, deleteEntry = async () => {}, concurrency = Infinity,
   loadSettings = async () => ({}), saveSettings = async () => {}, onActivityChange = () => {},
   prepareDownloads = async () => {}, changeFolder = async () => {}, ...dependencies }) {
   const entries = [], runners = new Map(), active = new Set();
-  const pool = createDownloadPool();
-  let timeoutSeconds = DEFAULT_TIMEOUT_SECONDS;
+  const pools = new Map();
+  let downloadLimit = 50, vkDownloadLimit = 30;
+  const limitFor = entry => entry.job.provider === 'vk' ? vkDownloadLimit : downloadLimit;
+  const forgetRunner = id => { runners.delete(id); pools.delete(id); };
+  let timeoutSeconds = DEFAULT_TIMEOUT_SECONDS, completionRepeats = 0, vkPageDelaySeconds = DEFAULT_VK_PAGE_DELAY_SECONDS;
+  const resetRepeats = entry => { entry.autoRepeats = 0; };
   const completions = new Map();
   const activity = () => onActivityChange(active.size > 0 || entries.some(e => e.wanted));
   const locks = new Map();
@@ -31,17 +37,27 @@ export function createQueue({ loadEntries, saveEntry, deleteEntry = async () => 
   }
   let serial = Promise.resolve(), scheduling = Promise.resolve();
   const runnerFor = entry => {
-    if (!runners.has(entry.id)) runners.set(entry.id, createRunner({ ...dependencies, withFileLock, runFiles: pool.run,
-      getTimeout: () => timeoutSeconds * 1000,
-      loadJob: async () => entry.job,
-      saveJob: async job => { entry.job = job; await saveEntry(entry); }
-    }));
+    if (!runners.has(entry.id)) {
+      const pool = (entry.job.provider === 'vk' ? createVkDownloadPool : createDownloadPool)(limitFor(entry));
+      pools.set(entry.id, pool);
+      runners.set(entry.id, createRunner({ ...dependencies, trace: (event, data) => trace(event, { jobId: entry.id, session: entry.job.title, provider: entry.job.provider || 'yandex', ...data }), withFileLock, runFiles: pool.run,
+        getTimeout: () => timeoutSeconds * 1000, getVkPageDelay: () => vkPageDelaySeconds * 1000,
+        loadJob: async () => entry.job,
+        saveJob: async job => { entry.job = job; await saveEntry(entry); }
+      }));
+    }
     return runners.get(entry.id);
   };
   async function restore(restored, settings) {
-    entries.length = 0; runners.clear();
-    pool.setLimit(DOWNLOAD_LIMITS.includes(settings?.downloadLimit) ? settings.downloadLimit : 1);
+    await setLogging(settings?.logging === true);
+    trace('queue.restore', { count: restored.length });
+    entries.length = 0; runners.clear(); pools.clear();
+    downloadLimit = DOWNLOAD_LIMITS.includes(settings?.downloadLimit) ? settings.downloadLimit : 50;
+    vkDownloadLimit = VK_DOWNLOAD_LIMITS.includes(settings?.vkDownloadLimit) ? settings.vkDownloadLimit : 30;
     timeoutSeconds = DOWNLOAD_TIMEOUTS.includes(settings?.timeoutSeconds) ? settings.timeoutSeconds : DEFAULT_TIMEOUT_SECONDS;
+    vkPageDelaySeconds = VK_PAGE_DELAYS.includes(settings?.vkPageDelaySeconds) ? settings.vkPageDelaySeconds :
+      [15, 30, 60].includes(settings?.vkPageDelaySeconds) ? 10 : DEFAULT_VK_PAGE_DELAY_SECONDS;
+    completionRepeats = [0, 1, 2, 3].includes(settings?.completionRepeats) ? settings.completionRepeats : 0;
     restored.sort((a, b) => a.job.created.localeCompare(b.job.created));
     for (const entry of restored) {
       entry.wanted = false; entries.push(entry);
@@ -51,7 +67,7 @@ export function createQueue({ loadEntries, saveEntry, deleteEntry = async () => 
     for (const entry of [...entries]) {
       const newer = entries.findLast(e => e.job.publicUrl === entry.job.publicUrl && e.job.path === entry.job.path);
       if (newer !== entry) {
-        entries.splice(entries.indexOf(entry), 1); runners.delete(entry.id); await deleteEntry(entry.id);
+        entries.splice(entries.indexOf(entry), 1); forgetRunner(entry.id); await deleteEntry(entry.id);
       }
     }
   }
@@ -78,9 +94,21 @@ export function createQueue({ loadEntries, saveEntry, deleteEntry = async () => 
         try { await runner.command(entry.action || 'start', entry.actionArgs || {}); }
         catch (error) { active.delete(entry.id); entry.wanted = false; entry.error = error.message; await saveEntry(entry); continue; }
         const completion = runner.waitUntilIdle().then(async () => {
-          active.delete(entry.id); entry.wanted = false; await saveEntry(entry); await kick();
+          active.delete(entry.id);
+          const counts = summary(entry.job);
+          const repeatPreviews = entry.repeatPreviews !== false;
+          const repeat = entry.wanted && entry.job.phase === 'done' &&
+            (entry.autoRepeats || 0) < completionRepeats &&
+            (counts.failed || counts.directoriesFailed || (repeatPreviews && counts.previews));
+          entry.wanted = !!repeat;
+          if (repeat) {
+            entry.autoRepeats = (entry.autoRepeats || 0) + 1;
+            entry.action = 'retry'; entry.actionArgs = { includePreviews: repeatPreviews };
+            entry.overallNewFilesBaseline = 0;
+          }
+          await saveEntry(entry); await kick();
         }).catch(error => { active.delete(entry.id); entry.wanted = false; entry.error = error.message; })
-          .finally(() => { completions.delete(entry.id); activity(); });
+          .finally(() => { if (completions.get(entry.id) === completion) completions.delete(entry.id); activity(); });
         completions.set(entry.id, completion);
       }
       activity();
@@ -102,19 +130,23 @@ export function createQueue({ loadEntries, saveEntry, deleteEntry = async () => 
     }));
     const chosen = states.find(s => s.entry === selected);
     return { ...(chosen?.state || { running: false, job: null, current: '', notice: '' }),
-      downloadLimit: pool.limit, timeoutSeconds, activeDownloads: pool.active,
+      downloadLimit, vkDownloadLimit, timeoutSeconds, completionRepeats, vkPageDelaySeconds, ...logStatus(),
+      activeDownloads: [...pools.values()].reduce((sum, pool) => sum + pool.active, 0),
+      paused: !!selected?.paused,
       id: selected?.id, queued: !!selected?.wanted && !active.has(selected.id),
       notice: selected?.error || chosen?.state.notice || '',
       jobs: states.map(({ entry, state }) => ({ id: entry.id,
+        autoRepeats: entry.autoRepeats || 0, completionRepeats, paused: !!entry.paused,
         title: state.job?.title || entry.job.path, running: state.running,
         queued: entry.wanted && !active.has(entry.id), phase: state.job.phase,
         done: state.job.summary.done, total: state.job.summary.total,
-        summary: state.job.summary, pages: state.job.pages, current: state.current,
+        summary: state.job.summary, pages: state.job.pages, current: state.current, notice: entry.error || state.notice,
+        timing: state.job.timing, pendingDirectories: state.job.pendingDirectories,
         overallNewFiles: Math.max(0, state.job.summary.newFiles -
           (Number.isSafeInteger(entry.overallNewFilesBaseline) && entry.overallNewFilesBaseline >= 0 ? entry.overallNewFilesBaseline : 0)),
         resumable: !entry.wanted && !active.has(entry.id) && !state.running &&
-          (state.job.summary.pending > 0 || state.job.pendingDirectories > 0 || !!entry.suspendedRetry),
-        completed: !entry.wanted && !active.has(entry.id) && !state.running && state.job.phase === 'done',
+          (state.job.summary.pending > 0 || state.job.pendingDirectories > 0 || !!entry.suspendedRetry || !!entry.paused),
+        completed: !entry.paused && !entry.wanted && !active.has(entry.id) && !state.running && state.job.phase === 'done',
         issuesTotal: state.job.issuesTotal, ...(allIssues ? { issues: state.job.issues } : {}),
         publicUrl: entry.job.publicUrl, path: entry.job.path }))
     };
@@ -122,13 +154,14 @@ export function createQueue({ loadEntries, saveEntry, deleteEntry = async () => 
   async function execute(action, args = {}) {
     await ready;
     if (action === 'status') return snapshot(args.id, args.link, args.allIssues);
+    trace('command.start', { action, jobId: args.id });
     if (['scan', 'start', 'retry'].includes(action)) await prepareDownloads();
     if (action === 'stopAll' || action === 'pauseAll') {
       await scheduling;
       const targets = entries.filter(e => e.wanted || active.has(e.id));
       // Clear all queued starts before aborting a worker: its completion may
       // immediately schedule the next album otherwise.
-      for (const entry of targets) { rememberQueuedRetry(entry); entry.wanted = false; }
+      for (const entry of targets) { resetRepeats(entry); entry.paused = action === 'pauseAll'; rememberQueuedRetry(entry); entry.wanted = false; }
       await Promise.all(targets.map(e => runnerFor(e).command(action === 'pauseAll' ? 'pause' : 'stop')));
       await Promise.all(targets.map(e => runnerFor(e).waitUntilIdle()));
       await Promise.all([...completions.values()]);
@@ -151,7 +184,7 @@ export function createQueue({ loadEntries, saveEntry, deleteEntry = async () => 
       if (resumable.length) await prepareDownloads();
       for (const item of resumable) {
         const entry = entries.find(e => e.id === item.id);
-        entry.wanted = true; entry.action = entry.suspendedRetry ? 'retry' : 'start';
+        resetRepeats(entry); entry.paused = false; entry.wanted = true; entry.action = entry.suspendedRetry ? 'retry' : 'start';
         entry.actionArgs = { ...entry.suspendedRetry, resumeStopped: true }; delete entry.suspendedRetry;
         delete entry.error;
         await saveEntry(entry);
@@ -172,13 +205,14 @@ export function createQueue({ loadEntries, saveEntry, deleteEntry = async () => 
       }
       for (const item of targets) {
         const entry = entries.find(e => e.id === item.id);
+        resetRepeats(entry); entry.paused = false; entry.repeatPreviews = action === 'downloadAll' || args.includePreviews === true;
         entry.overallNewFilesBaseline = 0;
         entry.job.runNewFiles = 0;
         if (action === 'downloadAll') {
           const previous = entry.job;
           entry.job = newJob(previous.publicUrl + (previous.path === '/' ? '' : previous.path), previous.mode,
             { deduplicate: previous.deduplicate });
-          runners.delete(entry.id);
+          forgetRunner(entry.id);
           entry.action = 'start'; entry.actionArgs = {};
         } else {
           entry.action = 'retry'; entry.actionArgs = { includePreviews: args.includePreviews === true };
@@ -191,12 +225,23 @@ export function createQueue({ loadEntries, saveEntry, deleteEntry = async () => 
       return snapshot(args.id, undefined, args.allIssues);
     }
     if (action === 'settings') {
-      const limit = args.downloadLimit === undefined ? pool.limit : args.downloadLimit;
+      const logging = args.logging === undefined ? logStatus().logging : args.logging;
+      if (typeof logging !== 'boolean') throw new Error('Некорректная настройка логирования.');
+      const limit = args.downloadLimit === undefined ? downloadLimit : args.downloadLimit;
+      const vkLimit = args.vkDownloadLimit === undefined ? vkDownloadLimit : args.vkDownloadLimit;
       const timeout = args.timeoutSeconds === undefined ? timeoutSeconds : args.timeoutSeconds;
+      const pageDelay = args.vkPageDelaySeconds === undefined ? vkPageDelaySeconds : args.vkPageDelaySeconds;
+      if (!VK_PAGE_DELAYS.includes(pageDelay)) throw new Error('Недопустимая пауза запросов ВК.');
+      const repeats = args.completionRepeats === undefined ? completionRepeats : args.completionRepeats;
+      if (![0, 1, 2, 3].includes(repeats)) throw new Error('Выберите от 0 до 3 повторов после завершения.');
       if (!DOWNLOAD_LIMITS.includes(limit)) throw new Error('Недопустимое число загрузок.');
+      if (!VK_DOWNLOAD_LIMITS.includes(vkLimit)) throw new Error('Для ВК выберите 1, 4+1, 8+2, 12+4, 20+10, 25+15, 50+30, 70+40, 100+50, 150+70 или 200+100.');
       if (!DOWNLOAD_TIMEOUTS.includes(timeout)) throw new Error('Недопустимое время ожидания.');
-      await saveSettings({ downloadLimit: limit, timeoutSeconds: timeout });
-      pool.setLimit(limit); timeoutSeconds = timeout;
+      await saveSettings({ downloadLimit: limit, vkDownloadLimit: vkLimit, timeoutSeconds: timeout, completionRepeats: repeats, logging, vkPageDelaySeconds: pageDelay });
+      await setLogging(logging);
+      trace('settings.changed', { downloadLimit: limit, vkDownloadLimit: vkLimit, timeoutSeconds: timeout, vkPageDelaySeconds: pageDelay });
+      downloadLimit = limit; vkDownloadLimit = vkLimit; timeoutSeconds = timeout; completionRepeats = repeats; vkPageDelaySeconds = pageDelay;
+      for (const entry of entries) pools.get(entry.id)?.setLimit(limitFor(entry));
       return snapshot(args.id, undefined, args.allIssues);
     }
     if (action === 'folder') {
@@ -211,9 +256,10 @@ export function createQueue({ loadEntries, saveEntry, deleteEntry = async () => 
       if (!entry) {
         entry = entries.find(e => e.job.publicUrl === job.publicUrl && e.job.path === job.path);
         if (entry) {
-          runners.delete(entry.id); entry.job = job; entry.overallNewFilesBaseline = 0;
+          forgetRunner(entry.id); entry.job = job; entry.overallNewFilesBaseline = 0;
           entry.wanted = true; entry.action = 'start'; delete entry.error; delete entry.suspendedRetry;
         } else { entry = { id: crypto.randomUUID(), job, wanted: true, action: 'start' }; entries.push(entry); }
+        resetRepeats(entry); entry.paused = false; entry.repeatPreviews = true;
         await saveEntry(entry); await runnerFor(entry).ready;
       }
       await kick(); return snapshot(entry.id, undefined, args.allIssues);
@@ -221,6 +267,24 @@ export function createQueue({ loadEntries, saveEntry, deleteEntry = async () => 
     const entry = entries.find(e => e.id === args.id);
     if (!entry) throw new Error('Выберите задание в списке.');
     delete entry.error;
+    if (['start', 'retry', 'pause', 'stop', 'mode'].includes(action)) resetRepeats(entry);
+    if (action === 'retry') entry.repeatPreviews = args.includePreviews === true;
+    if (action === 'pause') entry.paused = true;
+    if (['start', 'retry', 'stop'].includes(action)) entry.paused = false;
+    if (action === 'mode') {
+      if (!DOWNLOAD_MODES.includes(args.mode)) throw new Error('Неизвестный режим скачивания.');
+      const resume = entry.wanted || active.has(entry.id);
+      const nextAction = active.has(entry.id) ? 'start' : entry.action;
+      const nextArgs = active.has(entry.id) ? {} : entry.actionArgs;
+      entry.wanted = false;
+      await runnerFor(entry).command('pause');
+      await runnerFor(entry).waitUntilIdle();
+      await completions.get(entry.id);
+      await runnerFor(entry).command('mode', { mode: args.mode });
+      if (resume) { entry.paused = false; entry.wanted = true; entry.action = nextAction || 'start'; entry.actionArgs = nextArgs || {}; }
+      await saveEntry(entry); await kick();
+      return snapshot(entry.id, undefined, args.allIssues);
+    }
     if (action === 'delete') {
       entry.wanted = false;
       await runnerFor(entry).command('stop');
@@ -229,7 +293,7 @@ export function createQueue({ loadEntries, saveEntry, deleteEntry = async () => 
       // Delete only after the last checkpoint/completion has finished, so it
       // cannot resurrect the row. Receipts and downloaded files stay intact.
       await deleteEntry(entry.id);
-      entries.splice(entries.indexOf(entry), 1); runners.delete(entry.id);
+      entries.splice(entries.indexOf(entry), 1); forgetRunner(entry.id);
       await kick();
       return snapshot(args.selectedId, undefined, args.allIssues);
     }
@@ -238,10 +302,10 @@ export function createQueue({ loadEntries, saveEntry, deleteEntry = async () => 
       entry.wanted = false;
       await runnerFor(entry).command(action);
     } else if (action === 'start' || action === 'retry') {
-      if (entry.job.phase === 'stopped') throw new Error('Нажмите «Скачать всё», чтобы проверить папку заново.');
+      if (entry.job.phase === 'stopped' && !args.resumeStopped) throw new Error('Нажмите «Скачать всё», чтобы проверить папку заново.');
       if (!active.has(entry.id)) {
         entry.wanted = true; entry.action = action === 'start' && entry.suspendedRetry ? 'retry' : action;
-        entry.actionArgs = action === 'retry' ? { includePreviews: args.includePreviews === true } : entry.suspendedRetry || {};
+        entry.actionArgs = action === 'retry' ? { includePreviews: args.includePreviews === true } : { ...entry.suspendedRetry, resumeStopped: args.resumeStopped === true };
         if (entry.action === 'retry') { entry.job.runNewFiles = 0; entry.overallNewFilesBaseline = 0; }
         delete entry.suspendedRetry;
       }
@@ -250,9 +314,11 @@ export function createQueue({ loadEntries, saveEntry, deleteEntry = async () => 
     await saveEntry(entry); await kick(); return snapshot(entry.id, undefined, args.allIssues);
   }
   function command(action, args) {
+    if (action === 'exportLog') return ready.then(() => exportLog('1.5.4')).then(text => ({ text }));
+    if (action === 'clearLog') return ready.then(clearLog).then(() => snapshot(args?.id));
     if (action === 'status') return ready.then(() => snapshot(args?.id, args?.link, args?.allIssues));
     const result = serial.then(() => execute(action, args));
-    serial = result.catch(() => {}); return result;
+    serial = result.then(() => trace('command.end', { action, jobId: args?.id }), error => trace('command.error', { action, jobId: args?.id, ...errorInfo(error) })); return result;
   }
   async function waitUntilIdle() {
     await ready; await serial; await scheduling;
@@ -262,5 +328,10 @@ export function createQueue({ loadEntries, saveEntry, deleteEntry = async () => 
       await new Promise(resolve => setTimeout(resolve, 0)); await scheduling;
     }
   }
-  return { command, ready, waitUntilIdle };
+  function heartbeat() {
+    if (!logStatus().logging) return;
+    trace('queue.heartbeat', { active: active.size, pending: entries.filter(e => e.wanted).length, downloadLimit, vkDownloadLimit, timeoutSeconds, vkPageDelaySeconds });
+    for (const id of active) runners.get(id)?.heartbeat();
+  }
+  return { command, ready, waitUntilIdle, heartbeat };
 }

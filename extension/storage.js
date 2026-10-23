@@ -120,3 +120,13 @@ export async function saveJob(job) {
     tx.onabort = () => reject(tx.error || new Error('Не удалось сохранить очередь.'));
   });
 }
+
+// Remove the obsolete browser log; new events are written only to disk.
+export async function deleteLegacyDebugLog() {
+  const connection = await db();
+  return new Promise((resolve, reject) => {
+    const tx = connection.transaction('jobs', 'readwrite');
+    tx.objectStore('jobs').delete('debug-log');
+    tx.oncomplete = resolve; tx.onerror = () => reject(tx.error); tx.onabort = () => reject(tx.error);
+  });
+}

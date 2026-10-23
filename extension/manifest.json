@@ -1,12 +1,13 @@
 {
   "manifest_version": 3,
-  "name": "Загрузчик Яндекс Диска",
-  "version": "1.3.11",
-  "description": "Скачивание публичных папок: несколько заданий, вложенные папки, оригиналы, копии фото и продолжение без дубликатов.",
+  "name": "Загрузчик Яндекс Диска и ВК",
+  "version": "1.5.7",
+  "description": "Скачивание папок Яндекс Диска, фотографий и выбранных видео диалогов ВК с продолжением без дубликатов.",
   "minimum_chrome_version": "124",
   "permissions": [
     "downloads",
     "activeTab",
+    "scripting",
     "offscreen",
     "power",
     "alarms"
@@ -20,10 +21,20 @@
   "host_permissions": [
     "https://cloud-api.yandex.net/*",
     "https://downloader.disk.yandex.ru/*",
-    "https://*.storage.yandex.net/*"
+    "https://*.storage.yandex.net/*",
+    "https://vk.ru/*",
+    "https://vk.com/*",
+    "https://www.vk.ru/*",
+    "https://www.vk.com/*",
+    "https://*.vkuserphoto.ru/*",
+    "https://*.vkuserphoto.com/*",
+    "https://*.userapi.com/*",
+    "https://*.vkusercontent.ru/*",
+    "https://*.okcdn.ru/*",
+    "https://*.vkuser.net/*"
   ],
   "action": {
-    "default_title": "Скачать файлы с Яндекс Диска",
+    "default_title": "Скачать с Яндекс Диска или из диалога ВК",
     "default_popup": "app.html",
     "default_icon": {
       "16": "icons/icon-16.png",
@@ -33,6 +44,7 @@
     }
   },
   "background": {
-    "service_worker": "background.js"
+    "service_worker": "background.js",
+    "type": "module"
   }
 }

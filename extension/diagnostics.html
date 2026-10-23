@@ -1,0 +1,6 @@
+<!doctype html>
+<html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Ошибки и пропуски</title><link rel="stylesheet" href="diagnostics.css"></head>
+<body><main><header><div><h1 id="title">Ошибки и пропуски</h1><p id="snapshot">Получаем список…</p></div><button id="close" aria-label="Закрыть окно">×</button></header>
+<div class="toolbar"><label><input type="checkbox" id="show-skipped"> Показывать пропущенные</label><span id="count"></span></div>
+<p id="message" role="status"></p><div class="table-scroll" id="table-scroll" tabindex="0" aria-label="Список ошибок и пропусков"><table><colgroup><col class="link-col"><col class="session-col"><col class="file-col"><col class="state-col"><col></colgroup><thead><tr><th aria-label="Открыть файл">↗</th><th class="session-col">Сессия</th><th>Файл / папка</th><th>Статус</th><th>Причина</th></tr></thead><tbody id="rows"></tbody></table></div>
+</main><script type="module" src="diagnostics.js"></script></body></html>

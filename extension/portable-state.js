@@ -1,12 +1,14 @@
 import { parseLink } from './core.js';
 import { requireFolder } from './local-files.js';
+import { STORED_MODES } from './modes.js';
 
 export const STATE_FILE = 'downloader-state.json';
+export const BACKUP_FILES = ['downloader-state.backup-1.json', 'downloader-state.backup-2.json'];
 export const SCHEMA_VERSION = 1;
 const FORMAT = 'yandex-disk-downloader';
 const clone = value => structuredClone(value);
 const object = value => value && typeof value === 'object' && !Array.isArray(value);
-const invalid = () => new Error('Файл базы повреждён или имеет неизвестный формат. Исходный JSON не изменён.');
+const invalid = () => Object.assign(new Error('Файл базы повреждён или имеет неизвестный формат. Исходный JSON не изменён.'), { stateCorrupt: true });
 const relative = value => typeof value === 'string' && !value.split('/').some(p => p === '.' || p === '..') && !/[\\:\u0000]/.test(value);
 
 // This registry is extended when the JSON schema changes. Each step must produce
@@ -33,10 +35,14 @@ export function decodeState(text) {
     if (!object(entry) || typeof entry.id !== 'string' || !entry.id || ids.has(entry.id) || !object(job)) throw invalid();
     ids.add(entry.id);
     if (![1, 2].includes(job.version)) throw new Error('Неизвестная версия задания в базе. Обновите расширение; файл не изменён.');
-    try { parseLink(job.publicUrl); } catch { throw invalid(); }
+    if (job.timeIntervals != null && (!Array.isArray(job.timeIntervals) || job.timeIntervals.some(range =>
+      !Array.isArray(range) || range.length !== 2 || !range.every(value => Number.isFinite(value) && value >= 0) || range[1] < range[0]))) throw invalid();
+    let source;
+    try { source = parseLink(job.publicUrl); } catch { throw invalid(); }
+    if (source.provider !== job.provider || (source.provider === 'vk' && (source.peerId !== job.peerId || job.path !== '/'))) throw invalid();
     if (typeof job.created !== 'string' || !relative(job.path) || !job.path.startsWith('/') ||
-        !relative(job.folder) || (job.folder && !job.folder.startsWith('yandex-disk/')) ||
-        !['auto', 'original', 'preview'].includes(job.mode) ||
+        !relative(job.folder) || (job.folder && !job.folder.startsWith(source.provider === 'vk' ? 'vk-messager/' : 'yandex-disk/')) ||
+        !STORED_MODES.includes(job.mode) || (job.modeVersion != null && job.modeVersion !== 1) ||
         !['scanning', 'ready', 'downloading', 'done', 'stopped'].includes(job.phase) ||
         !Array.isArray(job.files) || !Array.isArray(job.directories) || !object(job.usedPaths)) throw invalid();
     for (const file of job.files) {
@@ -77,15 +83,16 @@ async function writeJson(directory, name, text) {
     stream = await handle.createWritable();
     await stream.write(text);
     await stream.close();
+    if (await (await handle.getFile()).text() !== text) throw new Error('Проверка записанного файла не прошла.');
   } catch (error) {
     if (stream) await stream.abort().catch(() => {});
     throw Object.assign(new Error('Не удалось сохранить базу в папке: ' + error.message), { localAccess: true });
   }
 }
 
-export function createPortableStorage({ cache, extensionVersion }) {
+export function createPortableStorage({ cache, extensionVersion, now = Date.now }) {
   let state, entries, history, root = null, directory = null, blocked = null;
-  let dirty = 0, saved = 0, writing = null;
+  let dirty = 0, saved = 0, writing = null, backupAt = 0, backupIndex = 0, warning = '', cacheProblem = null;
   const setState = value => {
     state = { settings: clone(value.settings) };
     entries = new Map(value.entries.map(entry => [entry.id, clone(entry)]));
@@ -99,7 +106,14 @@ export function createPortableStorage({ cache, extensionVersion }) {
         while (saved !== dirty) {
           const revision = dirty;
           await requireFolder(root);
-          await writeJson(directory, STATE_FILE, encodeState(snapshot(), extensionVersion));
+          const text = encodeState(snapshot(), extensionVersion);
+          // Alternate backups at most once a minute, before replacing the main
+          // file. Keep an older generation if a crash interrupts a new write.
+          if (now() - backupAt >= 60000) {
+            await writeJson(directory, BACKUP_FILES[backupIndex], text);
+            backupIndex = (backupIndex + 1) % BACKUP_FILES.length; backupAt = now();
+          }
+          await writeJson(directory, STATE_FILE, text);
           saved = revision;
         }
       }).finally(() => { writing = null; });
@@ -112,27 +126,68 @@ export function createPortableStorage({ cache, extensionVersion }) {
     let text = null;
     try { text = await (await (await dir.getFileHandle(STATE_FILE)).getFile()).text(); }
     catch (error) { if (error.name !== 'NotFoundError') throw error; }
-    const decoded = text === null ? decodeState(encodeState(snapshot(), extensionVersion)) : decodeState(text);
+    if (text === null && cacheProblem) throw cacheProblem;
+    let decoded, recoveredFrom = '';
+    try { decoded = text === null ? decodeState(encodeState(snapshot(), extensionVersion)) : decodeState(text); }
+    catch (error) {
+      if (!error.stateCorrupt || text === null) throw error;
+      const candidates = [];
+      for (const name of BACKUP_FILES) {
+        try {
+          const backupText = await (await (await dir.getFileHandle(name)).getFile()).text();
+          const result = decodeState(backupText);
+          candidates.push({ name, result, text: backupText, at: Date.parse(result.data.updatedAt) || 0 });
+        } catch { /* An invalid backup must never replace the main file. */ }
+      }
+      candidates.sort((a, b) => b.at - a.at);
+      if (!candidates.length) throw error;
+      await writeJson(dir, 'downloader-state.corrupt-' + now() + '-' + crypto.randomUUID() + '.json', text);
+      const backup = candidates[0]; decoded = backup.result; text = backup.text; recoveredFrom = backup.name;
+    }
     // Preserve the byte-for-byte original before a schema/job migration.
     if (decoded.migrated) {
       await writeJson(dir, `downloader-state.before-migration-${Date.now()}-${crypto.randomUUID()}.json`, text ?? encodeState(snapshot(), extensionVersion));
     }
     const next = { entries: decoded.data.entries, settings: decoded.data.settings, history: decoded.data.history };
-    await writeJson(dir, STATE_FILE, encodeState(next, extensionVersion));
+    const nextText = encodeState(next, extensionVersion);
+    await writeJson(dir, BACKUP_FILES[0], text ?? nextText);
+    await writeJson(dir, STATE_FILE, nextText);
     await cache.replaceState(next);
-    setState(next); root = handle; directory = dir; dirty = saved = 0; blocked = null;
+    setState(next); root = handle; directory = dir; dirty = saved = 0; blocked = null; cacheProblem = null;
+    backupAt = now(); backupIndex = 1;
+    warning = recoveredFrom ? 'База восстановлена из ' + recoveredFrom + '. Повреждённый файл сохранён отдельно; проверьте последние задания.' : '';
     return clone(next);
   }
   const ready = (async () => {
-    setState(await cache.exportState());
-    const handle = await cache.loadDownloadFolder();
+    // A damaged browser cache must not prevent opening a valid disk database.
+    // Do not write the empty fallback anywhere until a disk state is selected.
+    let cacheError = null;
+    try {
+      const cached = await cache.exportState();
+      decodeState(encodeState(cached, extensionVersion));
+      setState(cached);
+    } catch {
+      cacheError = cacheProblem = new Error('Локальная копия базы браузера повреждена. Подключите папку с исправной JSON-базой в настройках.');
+      setState({ entries: [], history: [], settings: {} });
+    }
+    let handle;
+    try { handle = await cache.loadDownloadFolder(); }
+    catch { blocked = cacheError || new Error('Не удалось прочитать сохранённую папку. Выберите её заново в настройках.'); return; }
     if (handle) {
       try { await activate(handle); } catch (error) { blocked = error; }
-    }
+    } else if (cacheError) blocked = cacheError;
   })();
   return {
     ready,
     get error() { return blocked; },
+    get warning() { return warning; },
+    logDirectory: async () => {
+      await ready;
+      if (blocked) throw blocked;
+      await requireFolder(root);
+      if (!directory) throw new Error('Подтвердите папку с JSON-базой для записи журнала.');
+      return directory;
+    },
     loadEntries: async () => { await ready; return clone([...entries.values()]); },
     loadSettings: async () => { await ready; return clone(state.settings); },
     loadHistory: async key => { await ready; return clone(history.get(key)); },

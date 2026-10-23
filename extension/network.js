@@ -1,3 +1,5 @@
+import { dataTimeoutError } from './wait.js';
+import { deadline } from './deadlines.js';
 import { API, PAGE_SIZE, mediaUrl } from './core.js';
 
 export async function resource(job, path, offset = 0, signal) {
@@ -31,12 +33,17 @@ export async function getPhoto(job, file, kind, signal, onProgress = () => {}, t
     if (!url) throw new Error('У фотографии нет доступной копии для просмотра.');
   }
   if (!url) throw new Error('Яндекс не вернул ссылку на файл.');
+  return fetchPhoto(mediaUrl(url), file, kind, signal, onProgress, timeoutMs);
+}
+
+// The caller validates the provider's media host before using this shared reader.
+export async function fetchPhoto(url, file, kind, signal, onProgress = () => {}, timeoutMs = 25000) {
   const timeout = new AbortController();
   let timer;
-  const refresh = () => { clearTimeout(timer); timer = setTimeout(() => timeout.abort(new Error(`Нет данных от файлового сервера ${timeoutMs / 1000} с.`)), timeoutMs); };
+  const refresh = () => { timer?.(); timer = deadline(() => timeout.abort(dataTimeoutError(timeoutMs)), timeoutMs); };
   refresh();
   try {
-    const response = await fetch(mediaUrl(url), { credentials: 'omit', signal: AbortSignal.any([signal, timeout.signal]) });
+    const response = await fetch(url, { credentials: 'omit', signal: AbortSignal.any([...(signal ? [signal] : []), timeout.signal]) });
     if (!response.ok) {
       const error = new Error(`Файловый сервер: HTTP ${response.status}`);
       error.status = response.status;
@@ -72,5 +79,5 @@ export async function getPhoto(job, file, kind, signal, onProgress = () => {}, t
       bitmap.close();
     }
     return blob;
-  } finally { clearTimeout(timer); }
+  } finally { timer?.(); }
 }

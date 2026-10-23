@@ -131,3 +131,75 @@ test('an archive of 25000 files round-trips without losing late errors or previe
   assert.equal(restored.length, 25000); assert.equal(restored.at(-1).reason, 'Server unavailable');
   assert.equal(restored.filter(file => file.savedKind === 'preview').length, 5000);
 });
+
+
+test('a corrupt browser cache cannot block a valid JSON database on startup', async () => {
+  const f = folder(); f.files.set(STATE_FILE, encodeState({ entries: [entry('disk')], history: [], settings: {} }, '1.5.7'));
+  const local = cache({ entries: [null] }); local.loadDownloadFolder = async () => f.root;
+  const store = createPortableStorage({ cache: local, extensionVersion: '1.5.7' });
+  await store.ready; assert.equal(store.error, null); assert.equal((await store.loadEntries())[0].id, 'disk');
+});
+
+test('corrupt browser cache and corrupt JSON report a recoverable error without overwriting either', async () => {
+  const f = folder(); const broken = '\0'.repeat(100); f.files.set(STATE_FILE, broken);
+  const local = cache({ entries: [null] }); local.loadDownloadFolder = async () => f.root;
+  const store = createPortableStorage({ cache: local, extensionVersion: '1.5.7' });
+  await store.ready; assert.match(store.error.message, /повреждён/); assert.deepEqual(await store.loadEntries(), []);
+  assert.equal(f.files.get(STATE_FILE), broken); assert.deepEqual((await local.exportState()).entries, [null]);
+  f.files.set(STATE_FILE, encodeState({ entries: [], history: [], settings: {} }, '1.5.7'));
+  await store.changeFolder(f.root); assert.equal(store.error, null);
+});
+
+
+test('startup restores the newest valid backup and preserves corrupt main bytes', async () => {
+  const f = folder(), broken = '\0'.repeat(100);
+  const old = JSON.parse(encodeState({ entries: [entry('old')], history: [], settings: {} }, '1.5.7'));
+  old.updatedAt = '2026-10-22T00:00:00Z';
+  const recent = { ...old, entries: [entry('recent')], updatedAt: '2026-10-23T00:00:00Z' };
+  f.files.set(STATE_FILE, broken);
+  f.files.set('downloader-state.backup-1.json', JSON.stringify(old));
+  f.files.set('downloader-state.backup-2.json', JSON.stringify(recent));
+  const local = cache(); local.loadDownloadFolder = async () => f.root;
+  const store = createPortableStorage({ cache: local, extensionVersion: '1.5.7' }); await store.ready;
+  assert.equal(store.error, null); assert.equal((await store.loadEntries())[0].id, 'recent');
+  assert.match(store.warning, /восстановлена/);
+  assert([...f.files].some(([name, text]) => name.startsWith('downloader-state.corrupt-') && text === broken));
+  assert.equal(decodeState(f.files.get(STATE_FILE)).data.entries[0].id, 'recent');
+});
+
+test('a future main schema never falls back to an older backup', async () => {
+  const f = folder(); const data = JSON.parse(encodeState({ entries: [entry()], history: [], settings: {} }, '1.5.7'));
+  const future = JSON.stringify({ ...data, schemaVersion: 99 });
+  f.files.set(STATE_FILE, future); f.files.set('downloader-state.backup-1.json', JSON.stringify(data));
+  const local = cache(); local.loadDownloadFolder = async () => f.root;
+  const store = createPortableStorage({ cache: local, extensionVersion: '1.5.7' }); await store.ready;
+  assert.match(store.error.message, /более новой/); assert.equal(f.files.get(STATE_FILE), future); assert.equal(f.writes, 0);
+});
+
+test('backup generations rotate once per minute while regular checkpoints keep working', async () => {
+  let at = 0; const f = folder(); const store = createPortableStorage({ cache: cache(), extensionVersion: '1.5.7', now: () => at });
+  await store.changeFolder(f.root); await store.saveEntry(entry('one'));
+  assert(!f.files.has('downloader-state.backup-2.json'));
+  at = 61000; await store.saveEntry(entry('two'));
+  assert.equal(decodeState(f.files.get('downloader-state.backup-2.json')).data.entries.length, 2);
+  at = 62000; await store.saveEntry(entry('three'));
+  assert.equal(decodeState(f.files.get('downloader-state.backup-2.json')).data.entries.length, 2);
+  at = 122000; await store.saveEntry(entry('four'));
+  assert.equal(decodeState(f.files.get('downloader-state.backup-1.json')).data.entries.length, 4);
+  assert.equal(decodeState(f.files.get('downloader-state.backup-2.json')).data.entries.length, 2);
+});
+
+
+test('write verification detects a zero-filled readback and retains a valid backup', async () => {
+  const f = folder(); const directory = await f.root.getDirectoryHandle();
+  const getFileHandle = directory.getFileHandle;
+  directory.getFileHandle = async (name, options) => {
+    const handle = await getFileHandle(name, options);
+    if (name === STATE_FILE) handle.getFile = async () => new Blob(['\0'.repeat(100)]);
+    return handle;
+  };
+  f.root.getDirectoryHandle = async () => directory;
+  const store = createPortableStorage({ cache: cache({ entries: [entry()] }), extensionVersion: '1.5.7' });
+  await assert.rejects(store.changeFolder(f.root), error => error.localAccess && /Проверка записанного/.test(error.message));
+  assert.equal(decodeState(f.files.get('downloader-state.backup-1.json')).data.entries[0].id, 'album');
+});

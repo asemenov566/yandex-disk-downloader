@@ -25,7 +25,7 @@ test('timeout setting validates, persists, and does not reset the file limit', a
 test('changed timeout reaches subsequent photos and streamed videos without changing an in-flight photo', async () => {
   const seen = [], writes = [];
   let release;
-  const queue = createQueue({ loadEntries: async () => [], saveEntry: async () => {},
+  const queue = createQueue({ loadEntries: async () => [], saveEntry: async () => {}, loadSettings: async () => ({ downloadLimit: 1 }),
     resource: async () => ({ type: 'dir', name: 'Album', _embedded: { total: 3, offset: 0, items:
       ['a.jpg', 'b.jpg', 'c.mov'].map(name => ({ type: 'file', name, path: '/' + name, size: 3, media_type: name.endsWith('mov') ? 'video' : 'image' })) } }),
     getPhoto: async (_job, file, _kind, _signal, _progress, timeout) => {
@@ -65,15 +65,17 @@ test('HTTP 429 cancels concurrent files and leaves the album resumable', async (
   assert.match((await queue.command('status')).notice, /Rate limit/);
 });
 
-test('saved limit restores independently of queue entries and defaults to one for old installations', async () => {
+test('saved limit restores independently of queue entries and defaults to 50 Yandex and 30 VK without stored choices', async () => {
   const options = { loadEntries: async () => [], saveEntry: async () => {} };
-  assert.equal((await createQueue(options).command('status')).downloadLimit, 1);
+  assert.equal((await createQueue(options).command('status')).downloadLimit, 50);
+  assert.equal((await createQueue(options).command('status')).vkDownloadLimit, 30);
+  assert.equal((await createQueue({ ...options, loadSettings: async () => ({ downloadLimit: 1, vkDownloadLimit: 5 }) }).command('status')).vkDownloadLimit, 5);
   assert.equal((await createQueue({ ...options, loadSettings: async () => ({ downloadLimit: 25 }) }).command('status')).downloadLimit, 25);
 });
 
 test('one album fills the file budget; pause waits for all cancellations and resume keeps completed files', async () => {
   const entered = [], gates = [], files = [], stored = new Map(), activity = [];
-  let settings = {};
+  let settings = { downloadLimit: 1 };
   const queue = createQueue({
     loadEntries: async () => [], saveEntry: async entry => stored.set(entry.id, structuredClone(entry)),
     loadSettings: async () => settings, saveSettings: async value => { settings = value; },
@@ -108,4 +110,30 @@ test('one album fills the file budget; pause waits for all cancellations and res
   gates.slice(5).forEach(resolve => resolve()); await queue.waitUntilIdle();
   assert.equal(files.length, 8);
   assert.equal(new Set(files.map(f => f.filename)).size, 8);
+});
+
+test('VK pagination pause changes for the next page, persists and keeps the file limits', async () => {
+  let settings = {}, next, release;
+  const delays = []; let pages = 0;
+  const deps = { loadEntries: async () => [], saveEntry: async () => {}, loadSettings: async () => settings, saveSettings: async value => { settings = value; },
+    vk: { prepare: async () => ({ title: 'Test' }), nextPage: async (_job, signal, _notice, _dir, pause) => {
+      delays.push(pause);
+      if (++pages === 1) {
+        await new Promise(resolve => { release = resolve; });
+        return { files: [], cursor: { cmid: 10, position: 1 }, empty: false };
+      }
+      return { files: [], cursor: { cmid: 10, position: 1 }, empty: true };
+    } }
+  };
+  const queue = createQueue(deps);
+  assert.equal((await queue.command('status')).vkPageDelaySeconds, 1);
+  await queue.command('scan', { link: 'https://vk.ru/im/convo/1', mode: 'photos-auto' });
+  await until(() => !!release);
+  await queue.command('settings', { vkPageDelaySeconds: 5, vkDownloadLimit: 300, downloadLimit: 200 });
+  release(); await queue.waitUntilIdle();
+  assert.deepEqual(delays, [1000,5000]);
+  const restored = await createQueue(deps).command('status');
+  assert.equal(restored.vkPageDelaySeconds, 5); assert.equal(restored.vkDownloadLimit, 300); assert.equal(restored.downloadLimit, 200);
+  await assert.rejects(queue.command('settings', { vkPageDelaySeconds: 0 }));
+  assert.equal(settings.vkPageDelaySeconds, 5);
 });

@@ -156,8 +156,8 @@ test('resume all includes paused and stopped tasks without restarting a running 
   const c = await h.queue.command('scan', { link: 'https://disk.yandex.ru/d/c' });
   await until(() => h.gates.length === 3);
   await h.queue.command('resumeAll', { id: c.id });
-  h.gates[2](); await until(() => h.gates.length === 4); h.gates[3]();
-  await until(() => h.gates.length === 5); h.gates[4](); await h.queue.waitUntilIdle();
+  h.gates[2](); await until(() => h.gates.length === 5);
+  h.gates[3](); h.gates[4](); await h.queue.waitUntilIdle();
   assert.equal(h.entered.filter(url => url.endsWith('/c/')).length, 1);
   assert.equal(h.files.length, 3); assert.equal(h.scans.length, 3);
 });
@@ -212,12 +212,13 @@ test('deleting an active row cancels it and cannot resurrect it after a checkpoi
   assert.equal(h.files.length, 1); assert.equal(h.saved.size, 0);
 });
 
-test('settings change the global file budget during running jobs', async () => {
+test('each job has its own file budget, even at a limit of one', async () => {
   const h = setup(undefined, 1);
   await h.queue.command('scan', { link: 'https://disk.yandex.ru/d/a' });
   await h.queue.command('scan', { link: 'https://disk.yandex.ru/d/b' });
-  await until(() => h.gates.length === 1);
+  await until(() => h.gates.length === 2);
   assert.equal((await h.queue.command('status')).downloadLimit, 1);
+  assert.equal((await h.queue.command('status')).activeDownloads, 2);
   await h.queue.command('settings', { downloadLimit: 5 });
   await until(() => h.gates.length === 2);
   await assert.rejects(h.queue.command('settings', { downloadLimit: 0 }));

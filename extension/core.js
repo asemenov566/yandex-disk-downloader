@@ -1,11 +1,15 @@
+import { parseVkLink, ensureVkDirectories } from './vk.js';
+import { STORED_MODES } from './modes.js';
 export const API = 'https://cloud-api.yandex.net/v1/disk/public/resources';
 export const PAGE_SIZE = 200;
 
 export function parseLink(value) {
+  const vk = parseVkLink(value);
+  if (vk) return vk;
   let url;
-  try { url = new URL(value.trim()); } catch { throw new Error('Вставьте публичную ссылку на Яндекс Диск.'); }
+  try { url = new URL(value.trim()); } catch { throw new Error('Вставьте ссылку на Яндекс Диск или диалог ВК.'); }
   if (url.protocol !== 'https:' || !['disk.yandex.ru', 'disk.yandex.com', 'yadi.sk'].includes(url.hostname)) {
-    throw new Error('Нужна ссылка https://disk.yandex.ru/d/… или /i/…');
+    throw new Error('Нужна публичная ссылка Яндекс Диска или https://vk.ru/im/convo/…');
   }
   const match = url.pathname.match(/^\/(d|i)\/([^/]+)(\/.*)?$/);
   if (!match) throw new Error('Нужна публичная ссылка. Личный раздел /client/disk не поддерживается.');
@@ -37,10 +41,10 @@ export function classify(resource) {
 }
 
 export function newJob(link, mode = 'auto', { deduplicate = false } = {}) {
-  if (!['auto', 'original', 'preview'].includes(mode)) throw new Error('Неизвестный режим качества.');
-  return { ...parseLink(link), version: 2, mode, deduplicate: !!deduplicate, title: '', folder: '', phase: 'scanning', pages: 0,
+  if (!STORED_MODES.includes(mode)) throw new Error('Неизвестный режим скачивания.');
+  return ensureVkDirectories({ ...parseLink(link), version: 2, modeVersion: 1, mode, deduplicate: !!deduplicate, title: '', folder: '', phase: 'scanning', pages: 0,
     directories: [{ path: parseLink(link).path, local: '', offset: 0, state: 'pending', root: true }],
-    files: [], usedPaths: {}, originalFailures: 0, runNewFiles: 0, usePreviews: mode === 'preview', created: new Date().toISOString() };
+    files: [], usedPaths: {}, originalFailures: 0, runNewFiles: 0, usePreviews: mode === 'preview', created: new Date().toISOString() });
 }
 
 function allocate(job, parent, name, remotePath) {
@@ -118,7 +122,7 @@ function csv(rows) {
   };
   return '\ufeff' + rows.map(row => row.map(quote).join(';')).join('\r\n');
 }
-const reportHeader = ['Путь на Диске', 'Результат', 'Качество', 'Сохранённый файл', 'Ошибка / причина'];
+const reportHeader = ['Путь источника', 'Результат', 'Качество', 'Сохранённый файл', 'Ошибка / причина'];
 function reportRows(job) {
   const rows = [];
   for (const file of job.files) rows.push([file.path, file.state, file.savedKind || '', file.savedPath || '', file.reason || '']);

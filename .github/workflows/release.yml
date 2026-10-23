@@ -61,5 +61,5 @@ jobs:
             echo "Release $TAG already exists; assets are not overwritten."
           else
             gh release create "$TAG" dist/yandex-disk-downloader.zip dist/yandex-disk-downloader.zip.sha256 \
-              --target "$GITHUB_SHA" --title "$TAG — Загрузчик Яндекс Диска" --notes-file docs/release-notes.md
+              --target "$GITHUB_SHA" --title "$TAG — Загрузчик Яндекс Диска и ВК" --notes-file docs/release-notes.md
           fi

@@ -77,7 +77,7 @@ test('photo transfer obeys the selected no-data timeout', async t => {
       await started;
       t.mock.timers.tick(seconds * 1000 - 1); assert.equal(signal.aborted, false);
       t.mock.timers.tick(1);
-      await assert.rejects(transfer, new RegExp(seconds + ' с'));
+      await assert.rejects(transfer, error => error.dataTimeout === true && error.message.includes(seconds + ' с'));
     } finally { restore(); }
   }
 });

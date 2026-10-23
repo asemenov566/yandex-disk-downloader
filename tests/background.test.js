@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import vm from 'node:vm';
 import { readFile } from 'node:fs/promises';
+import { vkVideoUrl } from '../extension/vk.js';
 
 async function harness(coldAttempts = 0) {
   const messages = [], power = [], alarms = new Map();
@@ -20,7 +21,10 @@ async function harness(coldAttempts = 0) {
     alarms: { get: async key => alarms.get(key), create: async (key, value) => alarms.set(key, value),
       clear: async key => alarms.delete(key), onAlarm: { addListener: fn => { alarmListener = fn; } } }
   };
-  vm.runInNewContext(await readFile(new URL('../extension/background.js', import.meta.url), 'utf8'), { chrome, setTimeout, URL });
+  const source = (await readFile(new URL('../extension/background.js', import.meta.url), 'utf8'))
+    .replace("import { handleVkRequest } from './vk-browser.js';", '')
+    .replace("import { vkVideoUrl } from './vk.js';", '');
+  vm.runInNewContext(source, { chrome, setTimeout, URL, vkVideoUrl, handleVkRequest: async () => ({ ok: true }) });
   const send = (message, url = 'chrome-extension://test/offscreen.html') => new Promise(resolve =>
     listener({ target: 'background', ...message }, { id: 'test', url }, resolve));
   return { send, power, alarms, messages, alarm: () => alarmListener({ name: 'download-activity' }), setLive: value => { live = value; } };
@@ -49,4 +53,11 @@ test('cold start waits for listener before sending a command exactly once', asyn
   const result = await h.send({ type: 'command', action: 'scan', args: {} }, 'chrome-extension://test/app.html');
   assert.equal(result.ok, true);
   assert.deepEqual(h.messages.map(m => m.action), ['activity', 'activity', 'activity', 'scan']);
+});
+
+test('VK API bridge only accepts the offscreen worker, not a tab or popup', async () => {
+  const h = await harness();
+  assert.equal((await h.send({ type: 'vk-api', action: 'prepare' })).ok, true);
+  assert.equal((await h.send({ type: 'vk-api', action: 'prepare' }, 'chrome-extension://test/app.html')).ok, false);
+  assert.equal((await h.send({ type: 'vk-api', action: 'prepare' }, 'https://vk.ru/im/convo/1')).ok, false);
 });
