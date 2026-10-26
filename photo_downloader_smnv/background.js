@@ -64,7 +64,7 @@ chrome.runtime.onMessage.addListener((message, sender, respond) => {
         const url = new URL(message.args.url);
         const blob = message.args.url.startsWith('blob:' + chrome.runtime.getURL(''));
         let video = false;
-        if (message.args.filename?.startsWith('vk-messager/') && message.args.filename.endsWith('.mp4')) {
+        if (message.args.filename?.startsWith('vk-messeger/') && message.args.filename.endsWith('.mp4')) {
           try { video = !!vkVideoUrl(url.href); } catch { /* Not a VK media host. */ }
         }
         const remote = video || url.protocol === 'https:' && (url.hostname === 'downloader.disk.yandex.ru' || url.hostname.endsWith('.storage.yandex.net'));

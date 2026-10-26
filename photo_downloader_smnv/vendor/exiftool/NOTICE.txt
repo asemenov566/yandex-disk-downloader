@@ -1,0 +1,10 @@
+Bundled @colorhythm/exiftool-wasm 1.0.4 (Apache-2.0, see LICENSE).
+Source: https://github.com/colorhythm/exiftool-wasm
+Tarball: https://registry.npmjs.org/@colorhythm/exiftool-wasm/-/exiftool-wasm-1.0.4.tgz
+SHA512: 1sRiPURiKxz3gdvYnw346IXiPLjFedMWzbvjNq84RqCgfUEQUWLlfBuTE14WT3bNT+bFwXlr6rO4gHIgM+O8Ag==
+The index.js and zeroperl-mqcadjqm.wasm files are unmodified distribution artifacts.
+Includes ExifTool 13.59 by Phil Harvey, licensed under the same terms as Perl (Artistic or GPL).
+ExifTool source: https://github.com/exiftool/exiftool
+Perl source: https://github.com/Perl/perl5
+ZeroPerl: https://github.com/colorhythm/zeroperl (fork of https://github.com/6over3/zeroperl).
+ExifTool/Perl license texts accompany these files. Processing runs offline in a dedicated extension worker.

@@ -1,16 +1,16 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { setMaxListeners } from 'node:events';
-import { createQueue } from '../extension/queue.js';
-import { newJob } from '../extension/core.js';
-import { photoResource, videoResource } from '../extension/vk.js';
-import { decodeState, encodeState } from '../extension/portable-state.js';
+import { createQueue } from '../photo_downloader_smnv/queue.js';
+import { newJob } from '../photo_downloader_smnv/core.js';
+import { photoResource, videoResource } from '../photo_downloader_smnv/vk.js';
+import { decodeState, encodeState } from '../photo_downloader_smnv/portable-state.js';
 
 const tick = () => new Promise(resolve => setImmediate(resolve));
 async function until(check) { for (let i = 0; i < 500; i++) { if (check()) return; await tick(); } throw new Error('Condition not reached'); }
 function entry(provider, id, mode = 'auto', count = 1) {
   const job = newJob(provider === 'vk' ? `https://vk.ru/im/convo/${id}` : `https://disk.yandex.ru/d/${id}`, mode);
-  job.title = String(id); job.folder = (provider === 'vk' ? 'vk-messager/' : 'yandex-disk/') + id; job.phase = 'ready';
+  job.title = String(id); job.folder = (provider === 'vk' ? 'vk-messeger/' : 'yandex-disk/') + id; job.phase = 'ready';
   job.directories.forEach(dir => { dir.state = 'done'; dir.cursor = { cmid: 100, position: 1 }; });
   const media = `https://sun9.vkuserphoto.ru/${id}.jpg`;
   for (let n = 0; n < count; n++) {

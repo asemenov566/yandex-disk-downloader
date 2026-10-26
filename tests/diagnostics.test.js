@@ -1,9 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { issueLink, diagnosticRows, sessionStatus } from '../extension/diagnostics-data.js';
-import { createRunner } from '../extension/runner.js';
-import { newJob, consumePage } from '../extension/core.js';
-import { createDownloadPool } from '../extension/pool.js';
+import { issueLink, diagnosticRows, sessionStatus } from '../photo_downloader_smnv/diagnostics-data.js';
+import { createRunner } from '../photo_downloader_smnv/runner.js';
+import { newJob, consumePage } from '../photo_downloader_smnv/core.js';
+import { createDownloadPool } from '../photo_downloader_smnv/pool.js';
 
 const resource = (count = 4) => ({ type: 'dir', name: 'Album', _embedded: { offset: 0, total: count,
   items: Array.from({ length: count }, (_, n) => ({ type: 'file', name: n + '.jpg', path: '/' + n + '.jpg', media_type: 'image', size: 3 })) } });
@@ -29,16 +29,23 @@ test('full diagnostics includes older errors, skips, failed directories and clea
   assert.equal('vk' in full.issues[0], false);
 });
 
-test('links encode Yandex file paths and validate VK media hosts with a viewer fallback', () => {
+test('links encode Yandex paths and open VK photos in the keyed messenger viewer', () => {
   assert.equal(issueLink({ publicUrl: 'https://disk.yandex.ru/d/example' }, { path: '/Папка/a #?%.jpg' }),
     'https://disk.yandex.ru/d/example/' + encodeURIComponent('Папка') + '/a%20%23%3F%25.jpg');
   assert.equal(issueLink({ publicUrl: 'javascript:alert(1)' }, { path: '/a' }), '');
   assert.equal(issueLink({ publicUrl: 'https://disk.yandex.ru/d/example' }, { path: '/../a' }), '');
   const job = { publicUrl: 'https://vk.ru/im/convo/101' };
   const file = { kind: 'photo', path: '/photo123_456', vk: { cmid: 99, preview: { url: 'https://sun1.userapi.com/test.jpg' } } };
-  assert.equal(issueLink(job, file), file.vk.preview.url);
+  assert.equal(issueLink(job, file), 'https://vk.ru/im?z=photo123_456');
+  file.vk.accessKey = '0123456789abcdef01';
+  assert.equal(issueLink(job, file), 'https://vk.ru/im?z=photo123_456/0123456789abcdef01');
+  file.vk.original = { url: 'https://sun1.userapi.com/original.jpg?private=test' };
+  assert(!issueLink(job, file).includes('userapi'));
+  assert(!issueLink(job, file).includes('private'));
   file.vk.preview.url = 'https://evil.example/photo.jpg';
-  const url = new URL(issueLink(job, file)); assert.equal(url.host, 'vk.ru'); assert.equal(url.searchParams.get('z'), 'photo123_456/mail101-99');
+  const url = new URL(issueLink(job, file)); assert.equal(url.host, 'vk.ru'); assert.equal(url.searchParams.get('z'), 'photo123_456/0123456789abcdef01');
+  file.vk.accessKey = 'key&redirect=https://evil.example';
+  assert.equal(issueLink(job, file), 'https://vk.ru/im?z=photo123_456');
 });
 
 test('all concurrent transfers appear before a photo blob exists, progress is independent and pause removes them', async () => {
@@ -52,6 +59,7 @@ test('all concurrent transfers appear before a photo blob exists, progress is in
   await runner.command('scan', { link: 'https://disk.yandex.ru/d/example' });
   await waitUntil(() => releases.size === 4);
   const snapshot = (await runner.command('status')).job.activeFiles;
+  assert.equal(snapshot[0].url, 'https://disk.yandex.ru/d/example/0.jpg');
   assert.equal(snapshot.length, 4); assert.equal(new Set(snapshot.map(x => x.path)).size, 4);
   assert.equal(snapshot[0].status, '1.0 МБ'); assert.equal(snapshot[3].status, '4.0 МБ');
   releases.get('/0.jpg')();

@@ -1,12 +1,12 @@
-import { createRunner } from '../extension/runner.js';
+import { createRunner } from '../photo_downloader_smnv/runner.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createVkApiQueue } from '../extension/vk-api-queue.js';
-import { createVkProvider } from '../extension/vk-provider.js';
-import { createVkDownloadPool } from '../extension/pool.js';
-import { retryNotFound, NOT_FOUND_DELAYS } from '../extension/retry.js';
-import { photoResource } from '../extension/vk.js';
-import { newJob } from '../extension/core.js';
+import { createVkApiQueue } from '../photo_downloader_smnv/vk-api-queue.js';
+import { createVkProvider } from '../photo_downloader_smnv/vk-provider.js';
+import { createVkDownloadPool } from '../photo_downloader_smnv/pool.js';
+import { retryNotFound, NOT_FOUND_DELAYS } from '../photo_downloader_smnv/retry.js';
+import { photoResource } from '../photo_downloader_smnv/vk.js';
+import { newJob } from '../photo_downloader_smnv/core.js';
 const tick = () => new Promise(resolve => setImmediate(resolve));
 async function until(check) { for (let i = 0; i < 100 && !check(); i++) await tick(); assert(check()); }
 const gate = () => { let resolve; const promise = new Promise(r => { resolve = r; }); return { promise, resolve }; };
@@ -43,13 +43,13 @@ for (const changed of [false, true]) test('404 retries the cached URL before one
   const file = photoResource(photo(oldUrl)), job = newJob('https://vk.ru/im/convo/1'); job.files = [file];
   const urls = []; let api = 0, elapsed = 0;
   const vk = createVkProvider({ sleep: async () => {}, send: async message => {
-    assert.equal(urls.length, 7); assert.equal(elapsed, 94000); assert.equal(message.action, 'photo'); api++;
+    assert.equal(urls.length, 4); assert.equal(elapsed, 22000); assert.equal(message.action, 'photo'); api++;
     return { ok: true, value: { ok: true, tabId: 1, value: { items: [photo(freshUrl)] } } };
   }, fetchImage: async url => { urls.push(url); if (url === oldUrl) throw missing(); return new Blob(['ok']); } });
   const work = () => retryNotFound((ms, attempt) => vk.getPhoto(job, file, 'original', new AbortController().signal, undefined, ms, () => {}, { refresh404: attempt === NOT_FOUND_DELAYS.length }),
     { timeout: 25000, sleep: async ms => { elapsed += ms; } });
   if (changed) assert.equal((await work()).size, 2); else await assert.rejects(work(), e => e.status === 404);
-  assert.equal(api, 1); assert.deepEqual(urls.slice(0, 7), Array(7).fill(oldUrl)); assert.equal(urls.length, changed ? 8 : 7);
+  assert.equal(api, 1); assert.deepEqual(urls.slice(0, 4), Array(4).fill(oldUrl)); assert.equal(urls.length, changed ? 5 : 4);
 });
 
 test('transient 404 succeeds on the same URL without any metadata request', async () => {
@@ -118,7 +118,7 @@ test('refresh cooldown covers original and preview metadata of the same file', a
 
 test('runner completes a wave of transient 404s with bounded slot lending and no refresh calls', async () => {
   const job = newJob('https://vk.ru/im/convo/1', 'photos-original');
-  job.title = 'Test'; job.folder = 'vk-messager/Test'; job.directories.forEach(dir => { dir.state = 'done'; });
+  job.title = 'Test'; job.folder = 'vk-messeger/Test'; job.directories.forEach(dir => { dir.state = 'done'; });
   job.files = Array.from({ length: 20 }, (_, n) => {
     const item = photo('https://sun9.vkuserphoto.ru/' + n + '.jpg'); item.attachment.photo.id = n + 1; return photoResource(item);
   });
@@ -180,4 +180,34 @@ test('identical media identities in different dialogues do not share cached refr
   await Promise.all(jobs.map(job => assert.rejects(vk.getPhoto(job, job.files[0], 'original', new AbortController().signal,
     undefined, 48000, () => {}, { refresh404: true }), error => error.status === 404)));
   assert.equal(calls, 2);
+});
+
+test('recent batch metadata serves neighboring 404s for ten minutes without extra API work', async () => {
+  let time = 0, requests = 0;
+  const make = id => { const item = photo('https://sun9.vkuserphoto.ru/' + id + '.jpg'); item.attachment.photo.id = id; return item; };
+  const job = newJob('https://vk.ru/im/convo/101'); job.files = [1, 2].map(id => photoResource(make(id)));
+  const vk = createVkProvider({ now: () => time, sleep: async () => {}, fetchImage: async () => { throw missing(); },
+    send: async () => { requests++; return { ok: true, value: { ok: true, tabId: 1, value: { items: [make(1), make(2)] } } }; } });
+  const read = (file, kind = 'original') => vk.getPhoto(job, file, kind, new AbortController().signal, undefined, 25000, () => {}, { refresh404: true });
+  await assert.rejects(read(job.files[0])); assert.equal(requests, 1);
+  time = 31000;
+  await assert.rejects(read(job.files[0], 'preview')); await assert.rejects(read(job.files[1]));
+  assert.equal(requests, 1);
+  time = 600000;
+  await assert.rejects(read(job.files[1])); assert.equal(requests, 2);
+});
+
+test('404 metadata cooldown does not suppress expired authorization or a changed source URL', async () => {
+  let time = 0, requests = 0, status = 404;
+  const url = 'https://sun9.vkuserphoto.ru/old.jpg';
+  const job = newJob('https://vk.ru/im/convo/101'); job.files = [photoResource(photo(url))];
+  const vk = createVkProvider({ now: () => time, sleep: async () => {},
+    fetchImage: async () => { throw Object.assign(new Error('unavailable'), { status }); },
+    send: async () => { requests++; return { ok: true, value: { ok: true, tabId: 1, value: { items: [photo(url)] } } }; } });
+  const read = () => vk.getPhoto(job, job.files[0], 'original', new AbortController().signal, undefined, 25000, () => {}, { refresh404: true });
+  await assert.rejects(read()); assert.equal(requests, 1);
+  time = 31000; status = 403;
+  await assert.rejects(read()); assert.equal(requests, 2);
+  status = 404; job.files[0].vk.original.url = 'https://sun9.vkuserphoto.ru/new.jpg';
+  await assert.rejects(read()); assert.equal(requests, 3);
 });

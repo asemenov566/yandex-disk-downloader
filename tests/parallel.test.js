@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createQueue } from '../extension/queue.js';
+import { createQueue } from '../photo_downloader_smnv/queue.js';
 
 const tick = () => new Promise(resolve => setImmediate(resolve));
 async function until(check) { for (let n = 0; n < 200; n++) { if (check()) return; await tick(); } throw new Error('Condition not reached'); }

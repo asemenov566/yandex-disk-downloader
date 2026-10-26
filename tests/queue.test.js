@@ -1,8 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createQueue } from '../extension/queue.js';
-import { newJob, outputPath } from '../extension/core.js';
-import { overallProgress } from '../extension/progress.js';
+import { createQueue } from '../photo_downloader_smnv/queue.js';
+import { newJob, outputPath } from '../photo_downloader_smnv/core.js';
+import { overallProgress } from '../photo_downloader_smnv/progress.js';
 
 const tick = () => new Promise(resolve => setTimeout(resolve, 0));
 async function until(check) { for (let n = 0; n < 100; n++) { if (check()) return; await tick(); } throw new Error('Condition not reached'); }

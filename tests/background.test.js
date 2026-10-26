@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import vm from 'node:vm';
 import { readFile } from 'node:fs/promises';
-import { vkVideoUrl } from '../extension/vk.js';
+import { vkVideoUrl } from '../photo_downloader_smnv/vk.js';
 
 async function harness(coldAttempts = 0) {
   const messages = [], power = [], alarms = new Map();
@@ -21,7 +21,7 @@ async function harness(coldAttempts = 0) {
     alarms: { get: async key => alarms.get(key), create: async (key, value) => alarms.set(key, value),
       clear: async key => alarms.delete(key), onAlarm: { addListener: fn => { alarmListener = fn; } } }
   };
-  const source = (await readFile(new URL('../extension/background.js', import.meta.url), 'utf8'))
+  const source = (await readFile(new URL('../photo_downloader_smnv/background.js', import.meta.url), 'utf8'))
     .replace("import { handleVkRequest } from './vk-browser.js';", '')
     .replace("import { vkVideoUrl } from './vk.js';", '');
   vm.runInNewContext(source, { chrome, setTimeout, URL, vkVideoUrl, handleVkRequest: async () => ({ ok: true }) });
@@ -60,4 +60,12 @@ test('VK API bridge only accepts the offscreen worker, not a tab or popup', asyn
   assert.equal((await h.send({ type: 'vk-api', action: 'prepare' })).ok, true);
   assert.equal((await h.send({ type: 'vk-api', action: 'prepare' }, 'chrome-extension://test/app.html')).ok, false);
   assert.equal((await h.send({ type: 'vk-api', action: 'prepare' }, 'https://vk.ru/im/convo/1')).ok, false);
+});
+
+test('removed native date bridge rejects all operations', async () => {
+  const h = await harness();
+  assert.equal((await h.send({ type: 'native-dates', payload: { action: 'ping' } })).ok, false);
+  assert.equal((await h.send({ type: 'native-dates', payload: { action: 'delete' } })).ok, false);
+  assert.equal((await h.send({ type: 'native-dates', payload: { action: 'apply' } }, 'https://vk.ru')).ok, false);
+  assert.equal((await h.send({ type: 'native-dates', payload: { action: 'apply' } }, 'chrome-extension://test/app.html')).ok, false);
 });

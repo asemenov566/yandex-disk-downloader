@@ -62,12 +62,13 @@ export async function vkPageRequest(request) {
     const data = await call('messages.getHistoryAttachments', params);
     if (!Array.isArray(data?.items)) return fail('ВК вернул ответ без списка вложений.');
     const size = s => s && ({ type: s.type, width: s.width, height: s.height, url: s.url });
-    return { ok: true, value: { ...(Number.isSafeInteger(startCmid) ? { startCmid } : {}), items: data.items.map(item => ({ cmid: item.cmid, position: item.position,
+    return { ok: true, value: { ...(Number.isSafeInteger(startCmid) ? { startCmid } : {}), items: data.items.map(item => ({ cmid: item.cmid, position: item.position, date: item.date,
       attachment: { type: item.attachment?.type, ...(mediaType === 'photo' ? { photo: item.attachment?.photo && {
-        id: item.attachment.photo.id, owner_id: item.attachment.photo.owner_id,
+        id: item.attachment.photo.id, owner_id: item.attachment.photo.owner_id, date: item.attachment.photo.date,
+        access_key: /^[a-f0-9]{1,128}$/i.test(item.attachment.photo.access_key || '') ? item.attachment.photo.access_key : undefined,
         orig_photo: size(item.attachment.photo.orig_photo), sizes: item.attachment.photo.sizes?.map(size)
       } } : { video: item.attachment?.video && {
-        id: item.attachment.video.id, owner_id: item.attachment.video.owner_id, title: item.attachment.video.title,
+        id: item.attachment.video.id, owner_id: item.attachment.video.owner_id, title: item.attachment.video.title, date: item.attachment.video.date,
         files: { ...Object.fromEntries(Object.entries(item.attachment.video.files || {}).filter(([key, value]) => /^mp4_\d+$/.test(key) && typeof value === 'string')),
           ...(item.attachment.video.files?.external ? { external: true } : {}) }
       } }) }

@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createDownloadPool, createVkDownloadPool, VK_DOWNLOAD_PRESETS } from '../extension/pool.js';
+import { createDownloadPool, createVkDownloadPool, VK_DOWNLOAD_PRESETS } from '../photo_downloader_smnv/pool.js';
 
 const tick = () => new Promise(resolve => setImmediate(resolve));
 test('live limit increases immediately and decreases without cancelling active files', async () => {

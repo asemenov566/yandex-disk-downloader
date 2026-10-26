@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createRunner } from '../extension/runner.js';
-import { newJob } from '../extension/core.js';
+import { createRunner } from '../photo_downloader_smnv/runner.js';
+import { newJob } from '../photo_downloader_smnv/core.js';
 
 const photo = (path, extra = {}) => ({ type: 'file', name: path.split('/').pop(), path, size: 3, media_type: 'image', ...extra });
 const dir = (name, items, offset = 0, total = items.length) => ({ type: 'dir', name, _embedded: { items, offset, total } });

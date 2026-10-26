@@ -8,9 +8,9 @@ import assert from 'node:assert/strict';
 const require = createRequire(import.meta.url);
 const { chromium } = require(process.env.PLAYWRIGHT_MODULE || 'playwright');
 const root = path.resolve('test-output/browser-check-' + Date.now());
-const extension = path.join(root, 'extension'), downloads = path.join(root, 'downloads');
+const extension = path.join(root, 'photo_downloader_smnv'), downloads = path.join(root, 'downloads');
 await mkdir(downloads, { recursive: true });
-await cp(path.resolve('extension'), extension, { recursive: true });
+await cp(path.resolve('photo_downloader_smnv'), extension, { recursive: true });
 await writeFile(path.join(extension, 'network.js'), `
 const png = Uint8Array.from(atob('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII='), c => c.charCodeAt(0));
 export async function resource(job) {
@@ -152,7 +152,7 @@ try {
   const logOnDisk = await page.evaluate(async () => {
     const { loadDownloadFolder, db } = await import('./storage.js');
     const { logFileName } = await import('./logging.js');
-    const dir = await (await loadDownloadFolder()).getDirectoryHandle('yandex-disk');
+    const dir = await (await loadDownloadFolder()).getDirectoryHandle('photo_downloader_smnv');
     const text = await (await (await dir.getFileHandle(logFileName())).getFile()).text();
     const database = await db();
     const legacy = await new Promise((resolve, reject) => {
@@ -354,7 +354,7 @@ try {
   await page.waitForFunction(() => !document.getElementById('report-all').disabled);
   const commonReport = await page.evaluate(async () => {
     const { loadDownloadFolder } = await import('./storage.js');
-    const dir = await (await loadDownloadFolder()).getDirectoryHandle('yandex-disk');
+    const dir = await (await (await loadDownloadFolder()).getDirectoryHandle('photo_downloader_smnv')).getDirectoryHandle('yandex-disk');
     for await (const [name, handle] of dir.entries()) if (name.startsWith('download-report-all-')) return (await handle.getFile()).text();
   });
   assert(commonReport.includes('idleA')); assert(commonReport.includes('idleB'));
@@ -412,7 +412,7 @@ try {
   assert(beforeReinstall.jobs.some(j => j.summary.previews));
   const jsonBefore = await page.evaluate(async () => {
     const { loadDownloadFolder } = await import('./storage.js');
-    const dir = await (await loadDownloadFolder()).getDirectoryHandle('yandex-disk');
+    const dir = await (await loadDownloadFolder()).getDirectoryHandle('photo_downloader_smnv');
     return JSON.parse(await (await (await dir.getFileHandle('downloader-state.json')).getFile()).text());
   });
   assert.equal(jsonBefore.extensionVersion, await page.evaluate(() => chrome.runtime.getManifest().version));
@@ -450,7 +450,7 @@ try {
   const futureText = JSON.stringify({ ...jsonBefore, schemaVersion: 999 });
   await page.evaluate(async text => {
     const root = await (await navigator.storage.getDirectory()).getDirectoryHandle('FutureFormat', { create: true });
-    const dir = await root.getDirectoryHandle('yandex-disk', { create: true });
+    const dir = await root.getDirectoryHandle('photo_downloader_smnv', { create: true });
     const writable = await (await dir.getFileHandle('downloader-state.json', { create: true })).createWritable();
     await writable.write(text); await writable.close(); window.folderChoice = 'FutureFormat';
   }, futureText);
@@ -460,9 +460,14 @@ try {
   assert((await page.locator('#folder-status').textContent()).startsWith('ChangedWhileRunning'));
   assert.equal(await page.evaluate(async () => {
     const root = await (await navigator.storage.getDirectory()).getDirectoryHandle('FutureFormat');
-    const dir = await root.getDirectoryHandle('yandex-disk');
+    const dir = await root.getDirectoryHandle('photo_downloader_smnv');
     return (await (await dir.getFileHandle('downloader-state.json')).getFile()).text();
   }), futureText);
+  assert.equal(await page.locator('#dates-check').count(), 0);
+  const dateStatus = await command('datesStatus');
+  assert.equal(typeof dateStatus.checked, 'number');
+  assert.equal(dateStatus.helperReady, undefined);
+  assert(!(await page.evaluate(() => chrome.runtime.getManifest().permissions)).includes('nativeMessaging'));
   await page.keyboard.press('Escape');
   const idleSeconds = Number(process.env.IDLE_SECONDS || 0);
   if (idleSeconds) {

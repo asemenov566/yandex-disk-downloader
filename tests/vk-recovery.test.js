@@ -1,8 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { handleVkRequest } from '../extension/vk-browser.js';
-import { createVkProvider } from '../extension/vk-provider.js';
-import { newJob } from '../extension/core.js';
+import { handleVkRequest } from '../photo_downloader_smnv/vk-browser.js';
+import { createVkProvider } from '../photo_downloader_smnv/vk-provider.js';
+import { newJob } from '../photo_downloader_smnv/core.js';
 
 const link = 'https://vk.ru/im/convo/101';
 const cursor = { cmid: 1234, position: 2 };

@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { overallProgress, jobProgress, sortedSessions } from '../extension/progress.js';
+import { overallProgress, jobProgress, sortedSessions } from '../photo_downloader_smnv/progress.js';
 
 test('overall progress is weighted by file count, not by album percentages', () => {
   const result = overallProgress([

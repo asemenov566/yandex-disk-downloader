@@ -1,9 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { activeTime, jobTiming, overallTiming, timingText, duration } from '../extension/timing.js';
-import { overallProgress } from '../extension/progress.js';
-import { createRunner } from '../extension/runner.js';
-import { newJob } from '../extension/core.js';
+import { activeTime, jobTiming, overallTiming, timingText, duration } from '../photo_downloader_smnv/timing.js';
+import { overallProgress } from '../photo_downloader_smnv/progress.js';
+import { createRunner } from '../photo_downloader_smnv/runner.js';
+import { newJob } from '../photo_downloader_smnv/core.js';
 
 const tick = () => new Promise(resolve => setImmediate(resolve));
 async function until(check) { for (let i = 0; i < 100; i++) { if (check()) return; await tick(); } throw new Error('Condition not reached'); }

@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { getPhoto, resource } from '../extension/network.js';
+import { getPhoto, resource } from '../photo_downloader_smnv/network.js';
 
 const job = { publicUrl: 'https://disk.yandex.ru/d/test' };
 const file = { path: '/a.JPG', size: 3, mime: 'image/jpeg' };

@@ -1,5 +1,5 @@
 import { errorInfo } from './logging.js';
-import { retryNotFound, NOT_FOUND_DELAYS } from './retry.js';
+import { retryNotFound, NOT_FOUND_DELAYS, createNotFoundPolicy } from './retry.js';
 import { newJob, summary, report, outputPath, consumePage, safeName } from './core.js';
 import { consumeVkPage, ensureVkDirectories, filterVkVideos } from './vk.js';
 import { waitFor, dataTimeoutError } from './wait.js';
@@ -10,21 +10,22 @@ import { jobTiming, activeTime } from './timing.js';
 
 export function createRunner({ loadJob, saveJob, resource, getPhoto, getOriginalUrl, downloads, vk,
   loadHistory = async () => ({}), saveHistory = async () => {}, withFileLock = async (_key, work) => work(),
-  runFiles = createDownloadPool().run,
+  runFiles = createDownloadPool().run, runVkRequest = work => work(),
   findLocal = async () => null,
-  saveLocal, verifyLocal,
+  saveLocal, verifyLocal, afterSave = async () => {}, preparePhoto = async (_job, _file, blob) => blob, onDiscovered = async () => {},
   trace = () => {},
   getTimeout = () => 25000, getVkPageDelay = () => 1000,
   sleep = ms => new Promise(resolve => setTimeout(resolve, ms)), now = () => Date.now() }) {
   let job = null, running = false, controller, current = '', notice = '', stopping = false;
   let runPromise = Promise.resolve();
   const transfers = new Map();
+  const notFoundPolicy = createNotFoundPolicy({ now });
   function fileProgress(file, text) {
     const previous = transfers.get(file.path), at = now();
     const stage = /МБ/.test(text) ? 'receiving' : text.replace(/\d+/g, '#');
     const log = !previous || previous.stage !== stage || at - previous.loggedAt >= 5000;
     if (log) trace('file.progress', { file: job.files.indexOf(file), kind: file.kind, stage: text });
-    transfers.set(file.path, { path: file.path, name: file.name, kind: file.kind, status: text, stage,
+    transfers.set(file.path, { path: file.path, name: file.name, kind: file.kind, url: issueLink(job, file), status: text, stage,
       slotReleased: previous?.slotReleased || false, changedAt: previous?.status === text ? previous.changedAt : at, loggedAt: log ? at : previous.loggedAt });
     current = file.name + ' · ' + text;
   }
@@ -93,11 +94,11 @@ export function createRunner({ loadJob, saveJob, resource, getPhoto, getOriginal
     const pendingDirectories = job?.directories.filter(d => d.state === 'pending' && directoryEnabled(d)).length || 0;
     const issues = job ? [...job.directories.filter(d => d.state === 'failed'),
       ...job.files.filter(f => ['failed', 'skipped'].includes(f.state) || f.cleanupError)] : [];
-    return { running, current, notice, job: job ? {
+    return { running, current, currentUrl: [...transfers.values()].find(f => current.startsWith(f.name + ' · '))?.url || '', notice, job: job ? {
       title: job.title, folder: job.folder, phase: job.phase, pass: job.pass, pages: job.pages, mode: job.mode, provider: job.provider,
       publicUrl: job.publicUrl, path: job.path, deduplicate: !!job.deduplicate, usePreviews: job.usePreviews, summary: counts,
       downloadType: getDownloadType(), pendingDirectories, timing: jobTiming(job, counts, pendingDirectories),
-      activeFiles: [...transfers.values()].map(({ path, name, kind, status }) => ({ path, name, kind, status })),
+      activeFiles: [...transfers.values()].map(({ path, name, kind, status, url }) => ({ path, name, kind, status, url })),
       issuesTotal: issues.length,
       issues: (allIssues ? issues : issues.slice(-30)).map(f => ({ name: f.name || f.path,
         path: [job.rootTitle || job.title || 'Каталог', ...f.path.split('/').filter(Boolean)].join(' / '),
@@ -131,7 +132,11 @@ export function createRunner({ loadJob, saveJob, resource, getPhoto, getOriginal
       signal.throwIfAborted();
       const dir = job.directories.find(d => d.state === 'pending');
       current = `Список: ${dir.path} · начиная с файла ${dir.offset + 1}`;
-      try { consumePage(job, dir, await resource(job, dir.path, dir.offset, signal)); }
+      try {
+        const start = job.files.length;
+        consumePage(job, dir, await resource(job, dir.path, dir.offset, signal));
+        await onDiscovered(job, job.files.slice(start));
+      }
       catch (error) {
         signal.throwIfAborted();
         if (error.status === 429) throw error;
@@ -153,7 +158,7 @@ export function createRunner({ loadJob, saveJob, resource, getPhoto, getOriginal
     syncMediaSettings();
     if (!job.title) {
       job.title = info.title;
-      job.folder = 'vk-messager/' + safeName(info.title);
+      job.folder = 'vk-messeger/' + safeName(info.title);
     }
     await checkpoint();
     // Discovery advances independently of transfers. Each metadata page adds
@@ -179,6 +184,7 @@ export function createRunner({ loadJob, saveJob, resource, getPhoto, getOriginal
           const page = await vk.nextPage(job, signal, text => { current = text; }, dir, getVkPageDelay());
           signal.throwIfAborted();
           consumeVkPage(job, page, dir);
+          await onDiscovered(job, page.files);
           trace('page.end', { kind: dir.mediaType, files: page.files.length, cmid: dir.cursor?.cmid, position: dir.cursor?.position, total: job.files.length });
           syncMediaSettings();
           await checkpoint();
@@ -237,7 +243,8 @@ export function createRunner({ loadJob, saveJob, resource, getPhoto, getOriginal
       await persistHistory(file, history);
     } catch (error) { file.cleanupError = 'Оригинал сохранён, но превью осталось: ' + error.message; }
   }
-  async function remember(file) {
+  async function remember(file, signal) {
+    await afterSave(job, file, signal);
     const history = await known(file);
     history[file.savedKind] = recordOf(file);
     // Persist original before deleting anything, so interruption never loses the receipt.
@@ -246,6 +253,12 @@ export function createRunner({ loadJob, saveJob, resource, getPhoto, getOriginal
   }
   async function saveDownload(source, file, kind, signal, direct = false, timeoutMs = getTimeout()) {
     signal.throwIfAborted();
+    if (!direct && file.kind === 'photo') {
+      fileProgress(file, 'записываем даты фотографии');
+      const path = outputPath(job, file, kind, source.type);
+      source = await preparePhoto(job, file, source, kind, path, signal);
+      signal.throwIfAborted();
+    }
     if (saveLocal) {
       file.savedKind = kind; file.savedBytes = direct ? file.size : source.size;
       file.savedPath = outputPath(job, file, kind, direct ? file.mime || '' : source.type);
@@ -322,26 +335,32 @@ export function createRunner({ loadJob, saveJob, resource, getPhoto, getOriginal
       }
     };
     const timeoutMs = getTimeout();
-    const retry404 = work => job.provider !== 'vk' ? work(timeoutMs) : retryNotFound(work, { signal, timeout: timeoutMs, sleep, wait, onStatus: text => fileProgress(file, text),
+    const retry404 = work => {
+      if (job.provider !== 'vk') return work(timeoutMs);
+      const policy = notFoundPolicy(file, () => file.vk?.[file.kind === 'video' ? 'video' : kind]?.url,
+        () => trace('file.retry.skip', { file: job.files.indexOf(file), kind: file.kind, reason: 'recent-exhausted-404' }));
+      return retryNotFound((limit, attempt) => runVkRequest(() => work(limit, attempt), { signal, wait, onStatus: text => fileProgress(file, text) }), { ...policy, signal, timeout: timeoutMs, sleep, wait, onStatus: text => fileProgress(file, text),
       onAttempt: (attempt, ms) => trace('file.attempt.start', { file: job.files.indexOf(file), kind: file.kind, attempt, ms,
         linkAgeMs: file.kind === 'video' && Number.isFinite(file.vk?.video?.receivedAt) ? Math.max(0, now() - file.vk.video.receivedAt) : undefined }),
-      onSuccess: (attempt, ms) => trace('file.attempt.end', { file: job.files.indexOf(file), kind: file.kind, attempt, ms }),
+      onSuccess: (attempt, ms) => { policy.recovered(); trace('file.attempt.end', { file: job.files.indexOf(file), kind: file.kind, attempt, ms }); },
       onError: (error, attempt, ms) => trace('file.attempt.error', { file: job.files.indexOf(file), kind: file.kind, attempt, ms, ...errorInfo(error) }) });
+    };
     const local = await findLocal(job, file);
     if (local?.original) {
       reuse(file, local.original, 'Файл уже есть в выбранной папке');
-      await remember(file); return;
+      await remember(file, signal); return;
     }
     const history = await known(file);
     if (await existing(history.original, file)) {
       reuse(file, history.original, 'Уже сохранён полный файл');
+      await afterSave(job, file, signal); history.original = recordOf(file);
       await persistHistory(file, history);
       await removeOldPreview(file, history); return;
     }
     const preview = local?.preview || (await existing(history.preview, file) ? history.preview : null);
     // Revisit originals for existing previews on every fresh scan, even after prior failures.
-    let kind = !file.retryOriginal && file.kind === 'photo' && (photoQualityForMode(job.mode) === 'preview' || (job.usePreviews && !preview)) ? 'preview' : 'original';
-    if (kind === 'preview' && preview) { reuse(file, preview, 'Копия уже сохранена'); await remember(file); return; }
+    let kind = !file.retryOriginal && file.kind === 'photo' && (photoQualityForMode(job.mode) === 'preview' || (job.provider !== 'vk' && job.usePreviews && !preview)) ? 'preview' : 'original';
+    if (kind === 'preview' && preview) { reuse(file, preview, 'Копия уже сохранена'); await remember(file, signal); return; }
     if (file.kind !== 'photo' && getOriginalUrl) {
       await retry404(async (attemptTimeout, attempt = 0) => {
         fileProgress(file, 'получаем ссылку');
@@ -350,32 +369,45 @@ export function createRunner({ loadJob, saveJob, resource, getPhoto, getOriginal
         catch (error) {
           signal.throwIfAborted();
           if (job.provider !== 'vk' || ![401, 403, 404, 410].includes(error.status) || (error.status === 404 && attempt < NOT_FOUND_DELAYS.length)) throw error;
-          const refreshed = await vk.getOriginalUrl(job, file, signal, true, text => fileProgress(file, text), wait);
+          const refreshed = await vk.getOriginalUrl(job, file, signal, true, text => fileProgress(file, text), wait, { notFound: error.status === 404 });
           if (error.status === 404 && refreshed === url) throw error;
           await saveDownload(refreshed, file, 'original', signal, true, attemptTimeout);
         }
       });
     } else {
       const progress = bytes => { fileProgress(file, `${(bytes / 1048576).toFixed(1)} МБ`); };
+      const readPhoto = async () => {
+        try {
+          return await retry404((attemptTimeout, attempt = 0) => getPhoto(job, file, kind, signal, progress, attemptTimeout,
+            text => fileProgress(file, text), { refresh404: attempt === NOT_FOUND_DELAYS.length, wait }));
+        } catch (error) {
+          signal.throwIfAborted();
+          if (job.provider !== 'vk' || kind !== 'preview' || ![403, 404, 410].includes(error.status) || !vk.getPreviewFallback) throw error;
+          const fallback = await vk.getPreviewFallback(job, file, signal, progress, timeoutMs,
+            text => fileProgress(file, text), { wait, runRequest: runVkRequest });
+          if (!fallback) throw error;
+          return fallback;
+        }
+      };
       let blob;
       try {
         fileProgress(file, kind === 'original' ? 'получаем оригинал' : 'получаем копию');
-        blob = await retry404((attemptTimeout, attempt = 0) => getPhoto(job, file, kind, signal, progress, attemptTimeout, text => fileProgress(file, text), { refresh404: attempt === NOT_FOUND_DELAYS.length, wait }));
+        blob = await readPhoto();
         if (kind === 'original' && file.kind === 'photo') job.originalFailures = 0;
       } catch (error) {
         signal.throwIfAborted();
         if (error.status === 429 || error.vkSession || error.retryable || kind !== 'original' || (photoQualityForMode(job.mode) !== 'auto' && !file.retryOriginal) || file.kind !== 'photo') throw error;
         file.originalError = error.message; job.originalFailures++;
         if (job.originalFailures >= 3 && job.provider !== 'vk') job.usePreviews = true;
-        if (preview) { reuse(file, preview, 'Оригинал пока недоступен: ' + error.message); await remember(file); return; }
+        if (preview) { reuse(file, preview, 'Оригинал пока недоступен: ' + error.message); await remember(file, signal); return; }
         kind = 'preview'; fileProgress(file, 'пробуем копию для просмотра');
-        blob = await retry404((attemptTimeout, attempt = 0) => getPhoto(job, file, kind, signal, progress, attemptTimeout, text => fileProgress(file, text), { refresh404: attempt === NOT_FOUND_DELAYS.length, wait }));
+        blob = await readPhoto();
       }
       await saveDownload(blob, file, kind, signal, false, timeoutMs);
     }
     file.state = 'done';
     file.reason = file.savedKind === 'preview' && file.originalError ? 'Оригинал недоступен: ' + file.originalError : '';
-    await remember(file);
+    await remember(file, signal);
   }
   async function download(signal, partial = false, mediaType, scheduled = new Set()) {
     syncMediaSettings();
@@ -491,8 +523,8 @@ export function createRunner({ loadJob, saveJob, resource, getPhoto, getOriginal
       if (job.phase === 'stopped' && !args.resumeStopped) throw new Error('Задание остановлено. Нажмите «Скачать всё», чтобы проверить папку заново.');
       launch(async signal => {
         if (action === 'retry') {
-          // A retry is a new attempt; pause/resume keeps the same counter.
-          job.runNewFiles = 0;
+          // Automatic retries belong to the same manual run, including its new-file count.
+          if (!args.preserveNewFiles) job.runNewFiles = 0;
           const previousElapsed = activeTime(job.timeIntervals || []);
           if (job.timingFiles >= 2 && previousElapsed >= 1000) job.previousMsPerFile = previousElapsed / job.timingFiles;
           job.timeIntervals = []; job.timingFiles = 0; timedJob = null; updateClock();

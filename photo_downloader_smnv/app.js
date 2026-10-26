@@ -1,3 +1,18 @@
+function setFileLink(container, text, url) {
+  if (!url || !/^https:\/\//.test(url)) { container.textContent = text; return; }
+  let link = container.querySelector('a.file-view-link');
+  if (!link) {
+    link = document.createElement('a'); link.className = 'file-view-link';
+    link.addEventListener('click', async event => {
+      event.preventDefault();
+      try { await chrome.windows.create({ url: link.href, type: 'popup', width: 1100, height: 800, focused: true }); }
+      catch (error) { $('message').textContent = 'Не удалось открыть файл: ' + error.message; }
+    });
+    container.replaceChildren(link);
+  }
+  link.href = url; link.textContent = text; link.title = 'Открыть вложение в отдельном окне';
+}
+
 import { sessionStatus, shortSessionTitle } from './diagnostics-data.js';
 import { overallProgress, jobProgress, sortedSessions } from './progress.js';
 import { timingText, remainingText } from './timing.js';
@@ -6,6 +21,7 @@ import { vkPhotosLink } from './vk.js';
 import { loadDownloadFolder, stageDownloadFolder, clearFolderCandidate } from './storage.js';
 
 const $ = id => document.getElementById(id);
+document.querySelector('.version').textContent = chrome.runtime.getManifest().version;
 // A UI preference only: polling progress must never reopen the user's panel.
 try { $('overall-card').open = localStorage.getItem('overall-progress-collapsed') !== 'true'; } catch {}
 $('overall-card').addEventListener('toggle', () => {
@@ -46,6 +62,8 @@ async function request(action, args = {}) {
   return response.value;
 }
 function render() {
+  const dates = state.dates;
+  if (dates) $('dates-status').textContent = dates.message + (dates.checked ? ' Проверено: ' + dates.checked + ' · обновлено: ' + dates.updated + ' · без изменений: ' + dates.unchanged + ' · нет даты: ' + dates.missing + ' · формат не поддержан: ' + dates.unsupported + ' · ошибок: ' + dates.errors : '');
   const job = state.job, running = state.running, s = job?.summary;
   const nextHasJobs = state.jobs.length > 0;
   // Only a new automatic source opens the panel. Preserve manual toggles
@@ -83,7 +101,7 @@ function render() {
   $('retry-previews').disabled = running || state.queued || pending;
   $('report').disabled = running || pending || !job?.folder;
   $('restart-job').disabled = pending || running || state.queued || !folderReady || !job;
-  $('current').textContent = state.current || '';
+  setFileLink($('current'), state.current || '', state.currentUrl);
   renderTransfers();
   renderSessions();
   $('message').textContent = state.notice || '';
@@ -97,13 +115,13 @@ function render() {
   if (!job) {
     $('album').textContent = 'Загрузка — укажите ссылку';
     $('job-percent').textContent = '0%'; $('new-files').textContent = 'Новых: 0';
-    $('destination').textContent = (folderHandle?.name || 'Выбранная папка') + ' / yandex-disk / название альбома';
+    $('destination').textContent = (folderHandle?.name || 'Выбранная папка') + ' / photo_downloader_smnv / yandex-disk / название альбома';
     for (const key of ['total', 'originals', 'previews', 'skipped', 'failed']) $(key).textContent = '0';
     $('progress').value = 0; $('detail').textContent = ''; $('download-time').textContent = ''; $('issues-card').hidden = true; $('issues-section').hidden = true;
     return;
   }
   $('album').textContent = 'Загрузка — ' + (job.title || 'получаем название…');
-  $('destination').textContent = (folderHandle?.name || 'Выбранная папка') + ' / ' + (job.folder || (job.provider === 'vk' ? 'vk-messager / название диалога' : 'yandex-disk / название папки')).replaceAll('/', ' / ');
+  $('destination').textContent = (folderHandle?.name || 'Выбранная папка') + ' / photo_downloader_smnv / ' + (job.folder || (job.provider === 'vk' ? 'vk-messeger / название диалога' : 'yandex-disk / название папки')).replaceAll('/', ' / ');
   const status = running ? sessionStatus({ ...job, running, current: state.current }) : state.paused ? 'Пауза' : state.queued ? 'Ожидает свободного места' :
     (!running && ['scanning','downloading'].includes(job.phase) ? 'Пауза · ' : '') +
     (job.phase === 'downloading' && job.pass ? (job.provider === 'vk' ? (job.downloadType === 'photos' ? 'Фотографии' : job.downloadType === 'videos' ? 'Видео' : 'Фотографии и видео') : job.pass === 'photos' ? 'Сначала фотографии' : 'Видео, документы и остальные файлы') : (job.provider === 'vk' && job.phase === 'scanning' ? 'ВК: получаем вложения' : labels[job.phase]));
@@ -121,7 +139,8 @@ function render() {
   $('issues-card').hidden = !job.issues.length;
   $('issues-section').hidden = !job.issues.length;
   $('issues').replaceChildren(...job.issues.map(file => {
-    const li = document.createElement('li'); li.textContent = file.name + ' — ' + file.reason; return li;
+    const li = document.createElement('li'), name = document.createElement('b');
+    setFileLink(name, file.name, file.url); li.append(name, ' — ' + file.reason); return li;
   }));
 }
 function renderSettings() {
@@ -142,7 +161,7 @@ function renderSettings() {
   $('settings-message').textContent = settingsError;
   $('sessions-message').textContent = settingsError;
   $('folder-warning').hidden = !folderReady || folderAllowed;
-  $('folder-warning').textContent = folderHandle ? 'Папка сохранена. При запуске подтвердите доступ Chrome к ней — выбирать её заново не нужно.' : 'При первом скачивании выберите папку. Внутри создадим yandex-disk или vk-messager.';
+  $('folder-warning').textContent = folderHandle ? 'Папка сохранена. При запуске подтвердите доступ Chrome к ней — выбирать её заново не нужно.' : 'При первом скачивании выберите папку. Внутри создадим photo_downloader_smnv с папками yandex-disk и vk-messeger.';
   $('folder-status').textContent = !folderReady ? 'Читаем сохранённую папку…' : folderHandle ? folderHandle.name + (folderAllowed ? ' · доступ разрешён' : ' · папка сохранена, требуется разрешение Chrome') : 'Папка не выбрана.';
   $('choose-folder').textContent = deferredDownload ? 'Выбрать папку и начать' : folderHandle ? 'Изменить папку' : 'Выбрать папку';
   $('choose-folder').disabled = !folderReady || pending;
@@ -185,7 +204,7 @@ function renderOverall() {
   $('overall-current').replaceChildren(...state.jobs.filter(j => j.running).map(job => {
     const item = document.createElement('li');
     const title = document.createElement('b'); title.textContent = job.title;
-    const detail = document.createElement('span'); detail.textContent = job.current || labels[job.phase];
+    const detail = document.createElement('span'); setFileLink(detail, job.current || labels[job.phase], job.currentUrl);
     item.append(title, detail); return item;
   }));
   const issuesCount = state.jobs.reduce((count, job) => count + (job.issuesTotal || 0), 0);
@@ -196,7 +215,7 @@ function renderOverall() {
     $('overall-issues-loading').hidden = true;
     $('overall-issues-list').replaceChildren(...state.jobs.flatMap(job => job.issues.map(issue => {
       const item = document.createElement('li');
-      const path = document.createElement('b'); path.textContent = issue.path || job.title + ' / ' + issue.name;
+      const path = document.createElement('b'); setFileLink(path, issue.path || job.title + ' / ' + issue.name, issue.url);
       const reason = document.createElement('span'); reason.textContent = issue.reason;
       item.append(path, reason); return item;
     })));
@@ -419,7 +438,7 @@ function renderTransfers() {
       row = document.createElement('li'); row.dataset.path = file.path;
       row.append(document.createElement('b'), document.createElement('span')); list.append(row);
     }
-    row.children[0].textContent = file.name; row.children[0].title = file.path;
+    setFileLink(row.children[0], file.name, file.url); row.children[0].title = file.path;
     row.children[1].textContent = file.status;
   }
 }
@@ -506,7 +525,7 @@ function renderTransferDialog() {
       row = document.createElement('li'); row.dataset.path = file.path;
       row.append(document.createElement('b'), document.createElement('span')); list.append(row);
     }
-    row.children[0].textContent = (file.kind === 'video' ? 'Видео · ' : 'Фото · ') + file.name;
+    setFileLink(row.children[0], (file.kind === 'video' ? 'Видео · ' : 'Фото · ') + file.name, file.url);
     row.children[0].title = file.path;
     row.children[1].textContent = file.status;
   }

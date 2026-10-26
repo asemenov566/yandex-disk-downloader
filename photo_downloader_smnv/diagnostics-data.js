@@ -1,5 +1,4 @@
 import { parseLink } from './core.js';
-import { vkMediaUrl, vkVideoUrl } from './vk.js';
 
 // Construct only service URLs. Never pass arbitrary persisted URLs to a window.
 export function issueLink(job, file) {
@@ -10,15 +9,14 @@ export function issueLink(job, file) {
       if (parts.some(p => p === '.' || p === '..')) return '';
       return source.publicUrl + (parts.length ? '/' + parts.map(encodeURIComponent).join('/') : '');
     }
-    // Existing queues already contain the exact media URL, including private
-    // attachments. It opens the file itself without needing a new API token.
-    const media = file.kind === 'video' ? file.vk?.video?.url : file.vk?.original?.url || file.vk?.preview?.url;
-    if (media) {
-      try { return file.kind === 'video' ? vkVideoUrl(media) : vkMediaUrl(media); } catch {}
+    // Photos use the messenger viewer's private-photo key, never a CDN URL.
+    const id = (file.path || '').replace(/^\//, '');
+    if (/^photo-?\d+_\d+$/.test(id)) {
+      const key = /^[a-f0-9]{1,128}$/i.test(file.vk?.accessKey || '') ? file.vk.accessKey : '';
+      return 'https://vk.ru/im?z=' + id + (key ? '/' + key : '');
     }
     const url = new URL(source.publicUrl);
     url.searchParams.set('rp', 'peer' + source.peerId);
-    const id = (file.path || '').replace(/^\//, '');
     if (/^(photo|video)-?\d+_\d+$/.test(id)) {
       const context = id.startsWith('photo') && Number.isSafeInteger(file.vk?.cmid) ? '/mail' + source.peerId + '-' + file.vk.cmid : '';
       url.searchParams.set('z', id + context);

@@ -29,11 +29,13 @@ export function decodeState(text) {
     migrated = true;
   }
   if (!Array.isArray(data.entries) || !Array.isArray(data.history) || !object(data.settings)) throw invalid();
+  const renameSavedPath = value => typeof value === 'string' && value.startsWith('vk-messager/') ? 'vk-messeger/' + value.slice('vk-messager/'.length) : value;
+  const migratePath = (item, key) => { const next = renameSavedPath(item[key]); if (next !== item[key]) { item[key] = next; migrated = true; } };
   const ids = new Set();
   for (const entry of data.entries) {
     const job = entry?.job;
     if (!object(entry) || typeof entry.id !== 'string' || !entry.id || ids.has(entry.id) || !object(job)) throw invalid();
-    ids.add(entry.id);
+    ids.add(entry.id); migratePath(job, 'folder');
     if (![1, 2].includes(job.version)) throw new Error('Неизвестная версия задания в базе. Обновите расширение; файл не изменён.');
     if (job.timeIntervals != null && (!Array.isArray(job.timeIntervals) || job.timeIntervals.some(range =>
       !Array.isArray(range) || range.length !== 2 || !range.every(value => Number.isFinite(value) && value >= 0) || range[1] < range[0]))) throw invalid();
@@ -41,13 +43,14 @@ export function decodeState(text) {
     try { source = parseLink(job.publicUrl); } catch { throw invalid(); }
     if (source.provider !== job.provider || (source.provider === 'vk' && (source.peerId !== job.peerId || job.path !== '/'))) throw invalid();
     if (typeof job.created !== 'string' || !relative(job.path) || !job.path.startsWith('/') ||
-        !relative(job.folder) || (job.folder && !job.folder.startsWith(source.provider === 'vk' ? 'vk-messager/' : 'yandex-disk/')) ||
+        !relative(job.folder) || (job.folder && !job.folder.startsWith(source.provider === 'vk' ? 'vk-messeger/' : 'yandex-disk/')) ||
         !STORED_MODES.includes(job.mode) || (job.modeVersion != null && job.modeVersion !== 1) ||
         !['scanning', 'ready', 'downloading', 'done', 'stopped'].includes(job.phase) ||
         !Array.isArray(job.files) || !Array.isArray(job.directories) || !object(job.usedPaths)) throw invalid();
     for (const file of job.files) {
       if (!object(file) || !relative(file.local) || !relative(file.path) || typeof file.name !== 'string' ||
           !['photo', 'video', 'other'].includes(file.kind) || !['pending', 'active', 'done', 'failed', 'skipped'].includes(file.state)) throw invalid();
+      migratePath(file, 'savedPath');
       // Browser download ids are profile-specific and must never be replayed.
       delete file.downloadId;
       if (file.state === 'active') file.state = 'pending';
@@ -65,6 +68,7 @@ export function decodeState(text) {
     if (!Array.isArray(row) || row.length !== 2 || typeof row[0] !== 'string' || !object(row[1])) throw invalid();
     for (const record of Object.values(row[1])) {
       if (!object(record)) throw invalid();
+      migratePath(record, 'savedPath');
       delete record.downloadId;
     }
   }
@@ -122,10 +126,17 @@ export function createPortableStorage({ cache, extensionVersion, now = Date.now 
   }
   async function activate(handle) {
     await requireFolder(handle);
-    const dir = await handle.getDirectoryHandle('yandex-disk', { create: true });
+    const dir = await handle.getDirectoryHandle('photo_downloader_smnv', { create: true });
     let text = null;
     try { text = await (await (await dir.getFileHandle(STATE_FILE)).getFile()).text(); }
     catch (error) { if (error.name !== 'NotFoundError') throw error; }
+    if (text === null) {
+      try {
+        const old = await handle.getDirectoryHandle('yandex-disk');
+        await old.getFileHandle(STATE_FILE);
+        throw Object.assign(new Error('Найдена база в старой папке yandex-disk. Перенесите базы и папки в photo_downloader_smnv перед запуском. Старые данные не изменены.'), { localAccess: true });
+      } catch (error) { if (error.name !== 'NotFoundError') throw error; }
+    }
     if (text === null && cacheProblem) throw cacheProblem;
     let decoded, recoveredFrom = '';
     try { decoded = text === null ? decodeState(encodeState(snapshot(), extensionVersion)) : decodeState(text); }
@@ -164,8 +175,8 @@ export function createPortableStorage({ cache, extensionVersion, now = Date.now 
     let cacheError = null;
     try {
       const cached = await cache.exportState();
-      decodeState(encodeState(cached, extensionVersion));
-      setState(cached);
+      const normalized = decodeState(encodeState(cached, extensionVersion));
+      setState(normalized.data);
     } catch {
       cacheError = cacheProblem = new Error('Локальная копия базы браузера повреждена. Подключите папку с исправной JSON-базой в настройках.');
       setState({ entries: [], history: [], settings: {} });

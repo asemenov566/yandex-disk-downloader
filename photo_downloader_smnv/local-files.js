@@ -1,3 +1,4 @@
+import { fileHttpError } from './http-errors.js';
 import { outputPath } from './core.js';
 import { mediaUrl } from './core.js';
 import { waitFor, dataTimeoutError } from './wait.js';
@@ -17,7 +18,7 @@ export async function requireFolder(handle) {
 
 function pathParts(root, relative) {
   const parts = relative.split('/');
-  if (!['yandex-disk', 'vk-messager'].includes(parts[0]) || parts.some(p => !p || p === '.' || p === '..' || /[\\:]/.test(p))) throw new Error('Некорректный путь сохранения.');
+  if (!['yandex-disk', 'vk-messeger'].includes(parts[0]) || parts.some(p => !p || p === '.' || p === '..' || /[\\:]/.test(p))) throw new Error('Некорректный путь сохранения.');
   return parts;
 }
 
@@ -38,7 +39,7 @@ async function lookup(root, relative, kind, validateImage = false, validateVideo
       const bytes = new Uint8Array(await file.slice(0, 12).arrayBuffer());
       if (bytes.length < 12 || String.fromCharCode(...bytes.slice(4, 8)) !== 'ftyp') throw new Error('Файл уже есть, но не является MP4: ' + relative);
     }
-    return { savedKind: kind, savedBytes: file.size, savedPath: relative, localFile: true };
+    return { savedKind: kind, savedBytes: file.size, savedPath: relative, localFile: true, modifiedMs: file.lastModified };
   } catch (error) {
     if (error.name === 'NotFoundError') return null;
     if (error.name === 'NotAllowedError' || error.name === 'SecurityError') throw folderAccessError();
@@ -48,11 +49,11 @@ async function lookup(root, relative, kind, validateImage = false, validateVideo
 
 // Read the selected directory on every attempt. This also works with a fresh
 // extension database, copied files, and an empty Chrome downloads history.
-export async function findLocalFiles(root, job, file) {
+export async function findLocalFiles(root, job, file, dateReceipt = async () => false) {
   await requireFolder(root);
   const original = await lookup(root, outputPath(job, file, 'original', ''), 'original', job.provider === 'vk' && file.kind === 'photo', job.provider === 'vk' && file.kind === 'video');
   if (original) {
-    if (job.provider === 'vk' ? !original.savedBytes : (!Number.isFinite(file.size) || original.savedBytes !== file.size)) {
+    if (job.provider === 'vk' ? !original.savedBytes : ((!Number.isFinite(file.size) || original.savedBytes !== file.size) && !await dateReceipt(job, file, original, original.modifiedMs))) {
       throw new Error('Файл уже есть в папке, но его размер не совпадает с размером на Диске. Повторная копия не создаётся: ' + original.savedPath);
     }
     return { original, preview: null };
@@ -100,14 +101,14 @@ export async function saveLocalFile(root, relative, source, { signal, expectedSi
   const controller = new AbortController();
   const combined = signal ? AbortSignal.any([signal, controller.signal]) : controller.signal;
   const bounded = promise => waitFor(promise, { signal: combined, timeout, timeoutError: dataTimeoutError(timeout) });
-  const vkVideo = direct && relative.startsWith('vk-messager/') && relative.endsWith('.mp4');
+  const vkVideo = direct && relative.startsWith('vk-messeger/') && relative.endsWith('.mp4');
   let transferSize = expectedSize;
   const header = [];
   try {
     let stream;
     if (direct) {
       const response = await bounded(fetcher(vkVideo ? vkVideoUrl(source) : mediaUrl(source), { credentials: 'omit', signal: combined }));
-      if (!response.ok) throw Object.assign(new Error('Файловый сервер: HTTP ' + response.status), { status: response.status });
+      if (!response.ok) throw fileHttpError(response);
       if (vkVideo) {
         if (response.url) vkVideoUrl(response.url);
         if (/text\/|json|html|mpegurl|dash\+xml/i.test(response.headers.get('content-type') || '')) throw new Error('Вместо MP4 сервер вернул страницу или плейлист.');

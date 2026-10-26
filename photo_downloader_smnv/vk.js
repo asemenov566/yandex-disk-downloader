@@ -67,12 +67,15 @@ export function photoResource(item) {
   const image = value => value?.url ? { url: vkMediaUrl(value.url), width: value.width, height: value.height } : null;
   const original = image(photo.orig_photo);
   // Never call the largest preview an original when orig_photo is absent.
-  const preview = (photo.sizes || []).filter(s => ['s', 'm', 'x', 'y', 'z', 'w', 'base'].includes(s.type) && s.url)
-    .sort((a, b) => (b.width * b.height || 0) - (a.width * a.height || 0)).map(image)[0] || null;
+  const variants = (photo.sizes || []).filter(s => ['s', 'm', 'x', 'y', 'z', 'w', 'base'].includes(s.type) && s.url)
+    .sort((a, b) => (b.width * b.height || 0) - (a.width * a.height || 0)).map(image);
+  const previews = [...new Map(variants.map(source => [source.url, source])).values()];
+  const preview = previews[0] || null;
   const id = `photo${photo.owner_id}_${photo.id}`;
   const ext = original && new URL(original.url).pathname.match(/\.(jpe?g|png|webp|gif|avif)$/i)?.[0].toLowerCase() || '.jpg';
   return { path: '/' + id, name: id + ext, local: id + ext, kind: 'photo', state: 'pending',
-    vk: { cmid: item.cmid, position: item.position, original, preview }, reason: '' };
+    vk: { cmid: item.cmid, position: item.position,
+      ...(/^[a-f0-9]{1,128}$/i.test(photo.access_key || '') ? { accessKey: photo.access_key } : {}), original, preview, previews }, reason: '' };
 }
 
 export function videoResource(item) {
@@ -135,6 +138,11 @@ export function consumeVkPage(job, page, directory = job.directories[0]) {
 // Timestamp the first API response that supplied this exact media URL. A
 // refresh that returns the same URL must not reset its age in diagnostics.
 export function stampVkLinks(value, previous = null, at = Date.now()) {
+  const oldPreviews = new Map([...(previous?.previews || []), previous?.preview].filter(Boolean).map(source => [source.url, source]));
+  for (const source of value?.previews || []) {
+    const old = oldPreviews.get(source.url);
+    source.receivedAt = Number.isFinite(old?.receivedAt) ? old.receivedAt : at;
+  }
   for (const kind of ['original', 'preview', 'video']) {
     const source = value?.[kind], old = previous?.[kind];
     if (!source?.url) continue;

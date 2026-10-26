@@ -1,3 +1,4 @@
+import { createVkRateLimit } from './vk-rate-limit.js';
 import { trace, setLogging, logStatus, exportLog, clearLog, errorInfo } from './logging.js';
 import { createRunner } from './runner.js';
 import { newJob, parseLink, reportAll, summary } from './core.js';
@@ -11,6 +12,7 @@ export function createQueue({ loadEntries, saveEntry, deleteEntry = async () => 
   prepareDownloads = async () => {}, changeFolder = async () => {}, ...dependencies }) {
   const entries = [], runners = new Map(), active = new Set();
   const pools = new Map();
+  const vkRateLimit = createVkRateLimit({ sleep: dependencies.sleep, now: dependencies.now, trace: (event, data) => trace(event, { provider: 'vk', ...data }) });
   let downloadLimit = 50, vkDownloadLimit = 30;
   const limitFor = entry => entry.job.provider === 'vk' ? vkDownloadLimit : downloadLimit;
   const forgetRunner = id => { runners.delete(id); pools.delete(id); };
@@ -40,7 +42,7 @@ export function createQueue({ loadEntries, saveEntry, deleteEntry = async () => 
     if (!runners.has(entry.id)) {
       const pool = (entry.job.provider === 'vk' ? createVkDownloadPool : createDownloadPool)(limitFor(entry));
       pools.set(entry.id, pool);
-      runners.set(entry.id, createRunner({ ...dependencies, trace: (event, data) => trace(event, { jobId: entry.id, session: entry.job.title, provider: entry.job.provider || 'yandex', ...data }), withFileLock, runFiles: pool.run,
+      runners.set(entry.id, createRunner({ ...dependencies, runVkRequest: vkRateLimit.run, trace: (event, data) => trace(event, { jobId: entry.id, session: entry.job.title, provider: entry.job.provider || 'yandex', ...data }), withFileLock, runFiles: pool.run,
         getTimeout: () => timeoutSeconds * 1000, getVkPageDelay: () => vkPageDelaySeconds * 1000,
         loadJob: async () => entry.job,
         saveJob: async job => { entry.job = job; await saveEntry(entry); }
@@ -103,8 +105,7 @@ export function createQueue({ loadEntries, saveEntry, deleteEntry = async () => 
           entry.wanted = !!repeat;
           if (repeat) {
             entry.autoRepeats = (entry.autoRepeats || 0) + 1;
-            entry.action = 'retry'; entry.actionArgs = { includePreviews: repeatPreviews };
-            entry.overallNewFilesBaseline = 0;
+            entry.action = 'retry'; entry.actionArgs = { includePreviews: repeatPreviews, preserveNewFiles: true };
           }
           await saveEntry(entry); await kick();
         }).catch(error => { active.delete(entry.id); entry.wanted = false; entry.error = error.message; })
@@ -126,6 +127,7 @@ export function createQueue({ loadEntries, saveEntry, deleteEntry = async () => 
     selected ||= entries.at(-1);
     const states = await Promise.all(entries.map(async entry => {
       const state = await runnerFor(entry).command('status', { allIssues });
+      if (entry.job.provider === 'vk' && state.running && vkRateLimit.status()) { state.current = vkRateLimit.status(); state.currentUrl = ''; }
       return { entry, state };
     }));
     const chosen = states.find(s => s.entry === selected);
@@ -140,7 +142,7 @@ export function createQueue({ loadEntries, saveEntry, deleteEntry = async () => 
         title: state.job?.title || entry.job.path, running: state.running,
         queued: entry.wanted && !active.has(entry.id), phase: state.job.phase,
         done: state.job.summary.done, total: state.job.summary.total,
-        summary: state.job.summary, pages: state.job.pages, current: state.current, notice: entry.error || state.notice,
+        summary: state.job.summary, pages: state.job.pages, current: state.current, currentUrl: state.currentUrl, notice: entry.error || state.notice,
         timing: state.job.timing, pendingDirectories: state.job.pendingDirectories,
         overallNewFiles: Math.max(0, state.job.summary.newFiles -
           (Number.isSafeInteger(entry.overallNewFilesBaseline) && entry.overallNewFilesBaseline >= 0 ? entry.overallNewFilesBaseline : 0)),
@@ -306,7 +308,7 @@ export function createQueue({ loadEntries, saveEntry, deleteEntry = async () => 
       if (!active.has(entry.id)) {
         entry.wanted = true; entry.action = action === 'start' && entry.suspendedRetry ? 'retry' : action;
         entry.actionArgs = action === 'retry' ? { includePreviews: args.includePreviews === true } : { ...entry.suspendedRetry, resumeStopped: args.resumeStopped === true };
-        if (entry.action === 'retry') { entry.job.runNewFiles = 0; entry.overallNewFilesBaseline = 0; }
+        if (entry.action === 'retry' && !entry.actionArgs.preserveNewFiles) { entry.job.runNewFiles = 0; entry.overallNewFilesBaseline = 0; }
         delete entry.suspendedRetry;
       }
     } else if (action === 'report') await runnerFor(entry).command(action);
@@ -314,7 +316,7 @@ export function createQueue({ loadEntries, saveEntry, deleteEntry = async () => 
     await saveEntry(entry); await kick(); return snapshot(entry.id, undefined, args.allIssues);
   }
   function command(action, args) {
-    if (action === 'exportLog') return ready.then(() => exportLog('1.5.4')).then(text => ({ text }));
+    if (action === 'exportLog') return ready.then(() => exportLog()).then(text => ({ text }));
     if (action === 'clearLog') return ready.then(clearLog).then(() => snapshot(args?.id));
     if (action === 'status') return ready.then(() => snapshot(args?.id, args?.link, args?.allIssues));
     const result = serial.then(() => execute(action, args));
@@ -328,8 +330,12 @@ export function createQueue({ loadEntries, saveEntry, deleteEntry = async () => 
       await new Promise(resolve => setTimeout(resolve, 0)); await scheduling;
     }
   }
+  let lastHeartbeat = -Infinity;
   function heartbeat() {
-    if (!logStatus().logging) return;
+    if (!logStatus().logging) { lastHeartbeat = -Infinity; return; }
+    const at = (dependencies.now || Date.now)();
+    if (at >= lastHeartbeat && at - lastHeartbeat < 30000) return;
+    lastHeartbeat = at;
     trace('queue.heartbeat', { active: active.size, pending: entries.filter(e => e.wanted).length, downloadLimit, vkDownloadLimit, timeoutSeconds, vkPageDelaySeconds });
     for (const id of active) runners.get(id)?.heartbeat();
   }

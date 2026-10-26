@@ -1,15 +1,16 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import vm from 'node:vm';
-import { parseLink, newJob } from '../extension/core.js';
+import { parseLink, newJob } from '../photo_downloader_smnv/core.js';
 import { parseVkLink, vkMediaUrl, vkVideoUrl, vkPhotosLink, inspectVkPage, consumeVkPage, photoResource,
-  videoResource, allowedVkVideo, ensureVkDirectories, stampVkLinks } from '../extension/vk.js';
-import { vkPageRequest } from '../extension/vk-page.js';
-import { handleVkRequest } from '../extension/vk-browser.js';
-import { createVkProvider } from '../extension/vk-provider.js';
-import { createRunner } from '../extension/runner.js';
-import { createQueue } from '../extension/queue.js';
-import { decodeState, encodeState } from '../extension/portable-state.js';
+  videoResource, allowedVkVideo, ensureVkDirectories, stampVkLinks } from '../photo_downloader_smnv/vk.js';
+import { vkPageRequest } from '../photo_downloader_smnv/vk-page.js';
+import { createSourceDates, vkSourceDates } from '../photo_downloader_smnv/source-dates.js';
+import { handleVkRequest } from '../photo_downloader_smnv/vk-browser.js';
+import { createVkProvider } from '../photo_downloader_smnv/vk-provider.js';
+import { createRunner } from '../photo_downloader_smnv/runner.js';
+import { createQueue } from '../photo_downloader_smnv/queue.js';
+import { decodeState, encodeState } from '../photo_downloader_smnv/portable-state.js';
 
 const link = 'https://vk.ru/im/convo/101';
 const media = n => `https://sun9-81.vkuserphoto.ru/photos/${n}.jpg?quality=95`;
@@ -85,6 +86,39 @@ test('page bridge uses current session only in POST body and returns only downlo
   assert.equal(p.get('offset'), '1'); assert.equal(p.get('count'), '30'); assert.equal(p.get('attachment_types'), 'photo');
   assert(!h.captured().url.includes('TOKEN'));
   assert(!/TOKEN|PRIVATE|profiles|from_id/.test(JSON.stringify(result)));
+});
+
+test('private photo viewer key survives the bridge and resource conversion without the session token', async () => {
+  const raw = item(99); raw.attachment.photo.access_key = '0123456789abcdef01';
+  const result = await pageContext({ response: { items: [raw] } }).call({ action: 'page', cursor: { cmid: 100, position: 1 } });
+  assert.equal(photoResource(result.value.items[0]).vk.accessKey, '0123456789abcdef01');
+  assert(!JSON.stringify(result).includes('TEST_SESSION_TOKEN'));
+});
+
+test('VK page bridge persists photo/video dates and message fallback without a native helper', async () => {
+  for (const kind of ['photo', 'video']) for (const action of ['page', 'photo']) {
+    const items = [1600000000, undefined].map((date, index) => ({ cmid: 99 - index, position: 1, date: 1700000000,
+      attachment: { type: kind, [kind]: { id: 10 + index, owner_id: 123, date, text: 'PRIVATE', access_key: 'PRIVATE' } } }));
+    const h = pageContext({ response: { items } });
+    let written;
+    const store = createSourceDates({ uuid: () => 'test', getDirectory: async () => ({
+      getFileHandle: async (_name, options) => {
+        if (!options?.create) throw new DOMException('Missing', 'NotFoundError');
+        return { createWritable: async () => ({ write: async value => { written = value; }, close: async () => {}, abort: async () => {} }) };
+      }
+    }) });
+    const provider = createVkProvider({ sleep: async () => {},
+      send: async message => ({ ok: true, value: { ...await h.call({ ...message, mediaType: kind }), tabId: 2 } }),
+      captureDates: (job, rows) => store.capture(job, vkSourceDates(rows)) });
+    const job = { ...newJob(link), vkCursor: { cmid: 100, position: 1 } };
+    if (action === 'page') await provider.nextPage(job, signal(), undefined, { mediaType: kind, cursor: job.vkCursor }, 0);
+    else await provider.getDates(job, { kind, vk: { cmid: 100, position: 1 } }, signal());
+    const saved = JSON.parse(written).dates;
+    assert.equal(Object.keys(saved).length, 2);
+    assert.deepEqual(saved[JSON.stringify([link, `/${kind}123_10`])], { date: '2020-09-13T12:26:40.000Z', source: `vk.${kind}.date` });
+    assert.deepEqual(saved[JSON.stringify([link, `/${kind}123_11`])], { date: '2023-11-14T22:13:20.000Z', source: 'vk.item.date' });
+    assert(!/TOKEN|PRIVATE/.test(written));
+  }
 });
 
 test('initial page does not reuse a user scroll cursor; expired session and API error never expose secrets', async () => {
@@ -176,8 +210,11 @@ function runnerHarness(overrides = {}) {
 test('runner discovers independently, persists folder/cursor, and resumes/reuses unknown-size VK photos', async () => {
   const h = runnerHarness();
   await h.runner.command('scan', { link }); await h.runner.waitUntilIdle();
-  assert.deepEqual(h.events.map(e => e.split(':')[0]), ['page', 'page', 'page', 'original', 'save', 'original', 'save']);
-  assert.equal(h.saved().folder, 'vk-messager/Тестовый диалог'); assert.equal(h.saved().phase, 'done');
+  const events = h.events.map(e => e.split(':')[0]);
+  assert.equal(events.filter(e => e === 'page').length, 3);
+  assert.deepEqual(events.filter(e => e !== 'page'), ['original', 'save', 'original', 'save']);
+  assert.equal(events[0], 'page');
+  assert.equal(h.saved().folder, 'vk-messeger/Тестовый диалог'); assert.equal(h.saved().phase, 'done');
   assert.equal(h.saved().files.length, 2);
   const job = h.saved(); job.files.forEach(f => { f.state = 'pending'; });
   const second = createRunner({ ...h.deps, loadJob: async () => job });
@@ -232,7 +269,7 @@ test('session failure pauses instead of falling back/skipping remaining photos; 
 });
 
 test('portable database round-trips both providers and rejects mismatched source/folder', () => {
-  const vk = newJob(link); vk.title = 'Тестовый диалог'; vk.folder = 'vk-messager/' + vk.title;
+  const vk = newJob(link); vk.title = 'Тестовый диалог'; vk.folder = 'vk-messeger/' + vk.title;
   consumeVkPage(vk, inspectVkPage({ items: [item(100)] }));
   const state = { entries: [{ id: 'vk', job: vk }, { id: 'ya', job: newJob('https://disk.yandex.ru/d/test') }], history: [], settings: {} };
   const data = decodeState(encodeState(state, '1.4.0')).data;

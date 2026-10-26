@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { parseLink, newJob, consumePage, classify, safeName, outputPath, mediaUrl, summary, report } from '../extension/core.js';
+import { parseLink, newJob, consumePage, classify, safeName, outputPath, mediaUrl, summary, report } from '../photo_downloader_smnv/core.js';
 
 const image = (name, path = '/' + name) => ({ name, path, type: 'file', media_type: 'image', size: 123, mime_type: 'image/jpeg' });
 test('public links include nested paths and reject private/foreign/path traversal links', () => {

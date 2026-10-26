@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createPortableStorage, decodeState, encodeState, STATE_FILE } from '../extension/portable-state.js';
-import { newJob } from '../extension/core.js';
+import { createPortableStorage, decodeState, encodeState, STATE_FILE } from '../photo_downloader_smnv/portable-state.js';
+import { newJob } from '../photo_downloader_smnv/core.js';
 
 function folder() {
   const files = new Map(); let fail = false, writes = 0;
@@ -202,4 +202,36 @@ test('write verification detects a zero-filled readback and retains a valid back
   const store = createPortableStorage({ cache: cache({ entries: [entry()] }), extensionVersion: '1.5.7' });
   await assert.rejects(store.changeFolder(f.root), error => error.localAccess && /Проверка записанного/.test(error.message));
   assert.equal(decodeState(f.files.get('downloader-state.backup-1.json')).data.entries[0].id, 'album');
+});
+
+
+test('new storage uses application folder and leaves legacy storage untouched', async () => {
+  const old = folder(), app = folder(), names = [];
+  old.files.set(STATE_FILE, encodeState({ entries: [entry()], history: [], settings: {} }, '1.5.15'));
+  const root = { queryPermission: async () => 'granted', getDirectoryHandle: async name => {
+    names.push(name);
+    if (name === 'photo_downloader_smnv') return app.root.getDirectoryHandle(name);
+    if (name === 'yandex-disk') return old.root.getDirectoryHandle(name);
+    throw new DOMException('Missing', 'NotFoundError');
+  } };
+  const store = createPortableStorage({ cache: cache(), extensionVersion: '1.5.15' });
+  await assert.rejects(store.changeFolder(root), /Перенесите базы/);
+  assert.equal(app.files.size, 0); assert.equal(old.writes, 0);
+  app.files.set(STATE_FILE, old.files.get(STATE_FILE));
+  const restored = await store.changeFolder(root);
+  assert.equal(restored.entries.length, 1); assert.equal(old.writes, 0);
+  assert.equal(names.at(-1), 'photo_downloader_smnv');
+});
+
+test('legacy VK folder and saved receipts migrate without changing source identities', () => {
+  const job = newJob('https://vk.ru/im/convo/123');
+  job.folder = 'vk-messager/Test';
+  job.files = [{ path: '/photo1_2', local: 'photo1_2.jpg', name: 'photo1_2.jpg', kind: 'photo', state: 'done', savedPath: 'vk-messager/Test/photo1_2.jpg' }];
+  const state = { entries: [{ id: 'vk', job }], settings: {}, history: [['identity', { original: { savedPath: 'vk-messager/Test/photo1_2.jpg' } }]] };
+  const result = decodeState(encodeState(state, '1.5.15'));
+  assert(result.migrated);
+  assert.equal(result.data.entries[0].job.folder, 'vk-messeger/Test');
+  assert.equal(result.data.entries[0].job.files[0].savedPath, 'vk-messeger/Test/photo1_2.jpg');
+  assert.equal(result.data.entries[0].job.files[0].path, '/photo1_2');
+  assert.equal(result.data.history[0][1].original.savedPath, 'vk-messeger/Test/photo1_2.jpg');
 });

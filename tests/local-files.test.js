@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { findLocalFiles, requireFolder, saveLocalFile, verifyLocalRecord } from '../extension/local-files.js';
-import { createRunner } from '../extension/runner.js';
+import { findLocalFiles, requireFolder, saveLocalFile, verifyLocalRecord } from '../photo_downloader_smnv/local-files.js';
+import { createRunner } from '../photo_downloader_smnv/runner.js';
 
 function folder(files, name = 'Downloads', granted = true) {
   const directory = prefix => ({ name, queryPermission: async () => granted ? 'granted' : 'denied',
@@ -17,9 +17,9 @@ function folder(files, name = 'Downloads', granted = true) {
 
 test('VK reuses a valid local original without remote byte size and rejects corrupt existing images', async () => {
   const originalDecoder = globalThis.createImageBitmap;
-  const job = { provider: 'vk', folder: 'vk-messager/Тестовый диалог' };
+  const job = { provider: 'vk', folder: 'vk-messeger/Тестовый диалог' };
   const file = { local: 'photo123_1.jpg', kind: 'photo' };
-  const root = folder(new Map([['vk-messager/Тестовый диалог/photo123_1.jpg', 3]]));
+  const root = folder(new Map([['vk-messeger/Тестовый диалог/photo123_1.jpg', 3]]));
   try {
     let decoded = false;
     globalThis.createImageBitmap = async f => { assert.equal(f.size, 3); decoded = true; return { close() {} }; };
@@ -153,17 +153,17 @@ test('streams video without a full Blob, checks size and removes only its failed
 test('VK video streams small chunks, checks MP4 signature and Content-Length, and reuses the saved file', async () => {
   const { root, files } = writableFolder();
   const bytes = new Uint8Array([0, 0, 0, 12, 102, 116, 121, 112, 105, 115, 111, 109]);
-  const path = 'vk-messager/Test/video123_1.mp4';
+  const path = 'vk-messeger/Test/video123_1.mp4';
   let offset = 0;
   const fetcher = async () => new Response(new ReadableStream({ pull(c) {
     if (offset < bytes.length) { c.enqueue(bytes.slice(offset, offset + 2)); offset += 2; } else c.close();
   } }), { headers: { 'Content-Type': 'video/mp4', 'Content-Length': '12' } });
   await saveLocalFile(root, path, 'https://vkvd360.okcdn.ru/?video=1', { direct: true, fetcher });
   assert.equal(files.get(path).size, 12);
-  const local = await findLocalFiles(root, { provider: 'vk', folder: 'vk-messager/Test' }, { kind: 'video', local: 'video123_1.mp4' });
+  const local = await findLocalFiles(root, { provider: 'vk', folder: 'vk-messeger/Test' }, { kind: 'video', local: 'video123_1.mp4' });
   assert.equal(local.original.savedBytes, 12);
   for (const [body, type, length] of [['not video!!!', 'video/mp4', '12'], [bytes, 'video/mp4', '20'], ['<html>error', 'text/html', '10']]) {
-    const bad = 'vk-messager/Test/bad.mp4';
+    const bad = 'vk-messeger/Test/bad.mp4';
     await assert.rejects(saveLocalFile(root, bad, 'https://vkvd360.okcdn.ru/?video=2', { direct: true,
       fetcher: async () => new Response(body, { headers: { 'Content-Type': type, 'Content-Length': length } }) }));
     assert(!files.has(bad));

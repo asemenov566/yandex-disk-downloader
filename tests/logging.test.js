@@ -1,7 +1,8 @@
+import { createQueue } from '../photo_downloader_smnv/queue.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createDiagnosticLog, errorInfo, logFileName } from '../extension/logging.js';
-import { createFileLog } from '../extension/file-log.js';
+import { createDiagnosticLog, errorInfo, logFileName, configureLogging, setLogging } from '../photo_downloader_smnv/logging.js';
+import { createFileLog } from '../photo_downloader_smnv/file-log.js';
 
 function disk() {
   const files = new Map(); let denied = false, failName = '';
@@ -89,4 +90,30 @@ test('events arriving during a disk write remain queued for the next write', asy
   block = false; await log.flush();
   assert.deepEqual(persisted.map(row => row.event), ['logging.enabled', 'first', 'second']);
   assert.equal(logFileName(new Date(2026, 0, 2)), 'log--02-01-2026.log');
+});
+
+test('frequent activity polls emit queue and file heartbeats at most once per 30 seconds', async () => {
+  let time = 0, started = false, release;
+  const records = [];
+  configureLogging({ append: async rows => records.push(...rows), schedule });
+  const queue = createQueue({
+    now: () => time, loadEntries: async () => [], saveEntry: async () => {},
+    loadSettings: async () => ({ logging: true }),
+    resource: async () => ({ type: 'dir', name: 'Test', _embedded: { total: 1, offset: 0,
+      items: [{ type: 'file', name: 'a.jpg', path: '/a.jpg', media_type: 'image', size: 3 }] } }),
+    getPhoto: async () => { started = true; await new Promise(resolve => { release = resolve; }); return new Blob(['abc']); },
+    saveLocal: async savedPath => ({ savedPath, savedBytes: 3, localFile: true })
+  });
+  try {
+    await queue.command('scan', { link: 'https://disk.yandex.ru/d/test' });
+    for (let i = 0; i < 100 && !started; i++) await new Promise(resolve => setImmediate(resolve));
+    assert(started);
+    for (time = 0; time <= 60000; time += 1000) queue.heartbeat();
+    await setLogging(false);
+    for (const event of ['queue.heartbeat', 'session.heartbeat', 'file.heartbeat']) {
+      assert.equal(records.filter(row => row.event === event).length, 3, event);
+    }
+    queue.heartbeat();
+    release(); await queue.waitUntilIdle();
+  } finally { release?.(); await setLogging(false); configureLogging({ schedule }); }
 });

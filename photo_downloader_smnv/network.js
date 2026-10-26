@@ -1,3 +1,4 @@
+import { fileHttpError } from './http-errors.js';
 import { dataTimeoutError } from './wait.js';
 import { deadline } from './deadlines.js';
 import { API, PAGE_SIZE, mediaUrl } from './core.js';
@@ -45,9 +46,7 @@ export async function fetchPhoto(url, file, kind, signal, onProgress = () => {},
   try {
     const response = await fetch(url, { credentials: 'omit', signal: AbortSignal.any([...(signal ? [signal] : []), timeout.signal]) });
     if (!response.ok) {
-      const error = new Error(`Файловый сервер: HTTP ${response.status}`);
-      error.status = response.status;
-      throw error;
+      throw fileHttpError(response);
     }
     const mime = response.headers.get('content-type')?.split(';')[0] || 'application/octet-stream';
     if (/text\/|json|html/i.test(mime)) throw new Error('Вместо фотографии сервер вернул текст ошибки.');

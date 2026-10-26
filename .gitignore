@@ -13,3 +13,10 @@ downloader-state*.json
 *.dmp
 .env
 .env.*
+
+# Local date helper state
+downloader-dates.json
+downloader-date-results.json
+.downloader-dates.lock
+__pycache__/
+native-host/config.json

@@ -5,8 +5,8 @@ import path from 'node:path';
 import assert from 'node:assert/strict';
 const { chromium } = createRequire(import.meta.url)(process.env.PLAYWRIGHT_MODULE || 'playwright');
 const output = path.resolve('test-output/preview-' + Date.now());
-const extension = path.join(output, 'extension'); await mkdir(output, { recursive: true });
-await cp(path.resolve('extension'), extension, { recursive: true });
+const extension = path.join(output, 'photo_downloader_smnv'); await mkdir(output, { recursive: true });
+await cp(path.resolve('photo_downloader_smnv'), extension, { recursive: true });
 const context = await chromium.launchPersistentContext(path.join(output, 'profile'), {
   executablePath: process.env.CHROMIUM_PATH, headless: true, viewport: { width: 780, height: 780 },
   args: ['--disable-extensions-except=' + extension, '--load-extension=' + extension]

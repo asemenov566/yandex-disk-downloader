@@ -2,8 +2,8 @@
 // Downloads only previews. Run a real image decoder on the resulting files too.
 import { mkdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';
-import { newJob, consumePage, outputPath, summary, report } from '../extension/core.js';
-import { resource, getPhoto } from '../extension/network.js';
+import { newJob, consumePage, outputPath, summary, report } from '../photo_downloader_smnv/core.js';
+import { resource, getPhoto } from '../photo_downloader_smnv/network.js';
 const [link, destination] = process.argv.slice(2);
 if (!link || !destination) throw new Error('Expected a public link and output directory.');
 globalThis.createImageBitmap = async blob => {

@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createDeadlineClock } from '../extension/deadlines.js';
+import { createDeadlineClock } from '../photo_downloader_smnv/deadlines.js';
 const tick = () => new Promise(resolve => setImmediate(resolve));
 test('background replies expire deadlines even when document timers never run', async () => {
   let now = 0, wake, sleeps = 0;

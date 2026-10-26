@@ -39,3 +39,8 @@ dialog::backdrop{background:#182b4060}.dialog-heading{display:flex;align-items:c
 .session-info{grid-template-columns:25px minmax(90px,125px) repeat(5,minmax(0,1fr))}.session-errors-count strong{color:#a04c2f}@media(max-width:520px){.session-info{grid-template-columns:23px minmax(0,1fr) repeat(5,minmax(0,1fr));gap:4px}}
 
 .overall-header{list-style:none;cursor:pointer}.overall-header::-webkit-details-marker{display:none}.overall-header::before{content:"⌄";font-size:18px;color:#5273a6;flex:none}.overall-card[open]>.overall-header::before{transform:rotate(180deg)}.overall-header:focus-visible{outline:2px solid #8eb9ff;outline-offset:4px;border-radius:4px}
+
+.file-view-link{color:inherit;text-decoration:underline;text-decoration-color:#a9bbd4;text-underline-offset:2px;overflow-wrap:anywhere}.file-view-link:hover{color:#265fce}.file-view-link:focus-visible{outline:2px solid #8eb9ff;outline-offset:2px}
+
+/* Setup commands wrap inside the panel, including long local paths. */
+.card code { overflow-wrap: anywhere; white-space: pre-wrap; }

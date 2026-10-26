@@ -2,14 +2,14 @@ import { deadline } from './deadlines.js';
 
 // Only explicitly selected diagnostic fields are accepted. Never log request
 // bodies, credentials, URLs, browser errors, messages or attachment contents.
-const fields = new Set(['jobId','session','provider','file','kind','stage','phase','action','requestId','queueDepth','ms','attempt','status','reason','cmid','position','page','files','total','done','failed','pending','active','photos','videos','limit','bytes','unchangedMs','running','recovering','tabId','enabled','count','downloadLimit','vkDownloadLimit','timeoutSeconds','host','changed','linkAgeMs','vkPageDelaySeconds']);
+const fields = new Set(['jobId','session','provider','file','kind','stage','phase','action','requestId','queueDepth','ms','attempt','status','reason','cmid','position','page','files','total','done','failed','pending','active','photos','videos','limit','bytes','unchangedMs','running','recovering','tabId','enabled','count','downloadLimit','vkDownloadLimit','timeoutSeconds','host','changed','linkAgeMs','vkPageDelaySeconds','retryAfterMs','width','height']);
 function clean(data) {
   return Object.fromEntries(Object.entries(data).filter(([key, value]) => fields.has(key) &&
     (typeof value === 'string' || typeof value === 'boolean' || (typeof value === 'number' && Number.isFinite(value))))
     .map(([key, value]) => [key, typeof value === 'string' ? value.replace(/https?:[^\s]+/gi, '[URL]').replace(/vk1\.[^\s]+/g, '[TOKEN]').slice(0, 160) : value]));
 }
 export function errorInfo(error) {
-  return { status: Number(error?.status) || 0, reason: error?.name === 'AbortError' ? 'cancelled' : error?.localAccess ? 'folder-access' :
+  return { ...(Number.isFinite(error?.retryAfterMs) ? { retryAfterMs: error.retryAfterMs } : {}), status: Number(error?.status) || 0, reason: error?.name === 'AbortError' ? 'cancelled' : error?.localAccess ? 'folder-access' :
     error?.vkSession ? 'vk-session' : error?.retryable ? 'retryable' : /не ответил|Нет данных|timeout|timed out/i.test(error?.message || '') ? 'timeout' : 'failure' };
 }
 export function logFileName(at = Date.now()) {
@@ -46,7 +46,7 @@ export function createDiagnosticLog({ append = async () => {}, read = async () =
   return {
     ready, record, flush,
     status: () => ({ logging: enabled, logCount: sequence, logError: storageError,
-      logFile: 'yandex-disk/' + logFileName(now()), logPending: entries.length, logDropped: dropped }),
+      logFile: 'photo_downloader_smnv/' + logFileName(now()), logPending: entries.length, logDropped: dropped }),
     async setEnabled(value) {
       if (enabled === value) return;
       if (enabled) record('logging.disabled');
