@@ -44,3 +44,14 @@ dialog::backdrop{background:#182b4060}.dialog-heading{display:flex;align-items:c
 
 /* Setup commands wrap inside the panel, including long local paths. */
 .card code { overflow-wrap: anywhere; white-space: pre-wrap; }
+
+/* Keep the compact footer visible without covering the last scrollable row. */
+main{padding-bottom:48px}
+.run-hint{display:flex;align-items:center;gap:7px;margin:0;padding:0 3px;font-size:11px;color:#658073}
+.run-hint .dot{flex:none}
+.app-footer{position:fixed;bottom:0;left:50%;transform:translateX(-50%);display:block;width:780px;max-width:100vw;min-height:22px;padding:4px 16px;background:#f2f5f9;color:#6a7c90;z-index:4;font-size:10px;line-height:14px}
+.footer-meta{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:center;gap:10px;width:100%}
+.footer-meta>span{min-width:0;overflow-wrap:anywhere}
+.footer-meta a{color:inherit;font:inherit;text-decoration:none;white-space:nowrap;justify-self:end}
+.footer-meta a:hover{text-decoration:underline}
+.footer-meta a:focus-visible{outline:2px solid #8eb9ff;outline-offset:2px;border-radius:2px}

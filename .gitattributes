@@ -1,2 +1,20 @@
 * text=auto eol=lf
 *.png binary
+
+# Local artifacts must also stay out of Git source archives.
+test-output export-ignore
+dist export-ignore
+reports export-ignore
+screenshots export-ignore
+profiles export-ignore
+browser-profile export-ignore
+user-data-dir export-ignore
+*.local.json export-ignore
+*.local.toml export-ignore
+downloader-state*.json export-ignore
+downloader-dates.json export-ignore
+downloader-date-results.json export-ignore
+*.log export-ignore
+*.har export-ignore
+.env export-ignore
+.env.* export-ignore

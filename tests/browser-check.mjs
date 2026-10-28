@@ -1,42 +1,44 @@
 // Opt-in isolated Chromium smoke check. No user profile or Yandex requests.
 // PLAYWRIGHT_MODULE and CHROMIUM_PATH may point to an existing test runtime.
 import { createRequire } from 'node:module';
-import { cp, mkdir, writeFile, readdir } from 'node:fs/promises';
+import { mkdir, writeFile, readdir } from 'node:fs/promises';
 import path from 'node:path';
 import assert from 'node:assert/strict';
+import { createTestEnvironment, copyTestExtension } from './test-environment.mjs';
 
 const require = createRequire(import.meta.url);
 const { chromium } = require(process.env.PLAYWRIGHT_MODULE || 'playwright');
-const root = path.resolve('test-output/browser-check-' + Date.now());
-const extension = path.join(root, 'photo_downloader_smnv'), downloads = path.join(root, 'downloads');
-await mkdir(downloads, { recursive: true });
-await cp(path.resolve('photo_downloader_smnv'), extension, { recursive: true });
-await writeFile(path.join(extension, 'network.js'), `
-const png = Uint8Array.from(atob('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII='), c => c.charCodeAt(0));
-export async function resource(job) {
-  const count = job.publicUrl.split('/').pop().startsWith('idle') ? 1000 : 6;
-  return {type:'dir', name:job.publicUrl.split('/').pop(), _embedded:{total:count,offset:0,items:
-    Array.from({length:count},(_,n)=>({type:'file',name:n+'.png',path:'/'+n+'.png',size:png.length,media_type:'image'}))}};
-}
-export async function getPhoto(job, file, kind, signal) {
-  if (job.publicUrl.split('/').pop().startsWith('idle')) await chrome.runtime.sendMessage({target:'background',type:'delay',ms:500});
-  signal.throwIfAborted();
-  if (file.name === '0.png' && kind === 'original' && !job.publicUrl.split('/').pop().startsWith('idle')) throw new Error('Preview fixture');
-  return new Blob([png], {type:'image/png'});
-}
-export async function originalUrl() { throw new Error('No remote downloads in this test'); }
-export async function fetchPhoto() { throw new Error('No VK requests in this isolated UI test'); }
-`);
-const context = await chromium.launchPersistentContext(path.join(root, 'profile'), {
-  executablePath: process.env.CHROMIUM_PATH,
-  headless: true, viewport: { width: 780, height: 600 },
-  args: [`--disable-extensions-except=${extension}`, `--load-extension=${extension}`],
-  ignoreDefaultArgs: ['--disable-background-timer-throttling', '--disable-renderer-backgrounding', '--disable-backgrounding-occluded-windows'],
-  acceptDownloads: true
-});
+const workspace = await createTestEnvironment('browser-check');
+const root = workspace.root;
 try {
+  const extension = path.join(root, 'photo_downloader_smnv'), downloads = path.join(root, 'downloads');
+  await mkdir(downloads, { recursive: true });
+  await copyTestExtension(extension);
+  await writeFile(path.join(extension, 'network.js'), `
+  const png = Uint8Array.from(atob('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII='), c => c.charCodeAt(0));
+  export async function resource(job) {
+    const count = job.publicUrl.split('/').pop().startsWith('idle') ? 1000 : 6;
+    return {type:'dir', name:job.publicUrl.split('/').pop(), _embedded:{total:count,offset:0,items:
+      Array.from({length:count},(_,n)=>({type:'file',name:n+'.png',path:'/'+n+'.png',size:png.length,media_type:'image'}))}};
+  }
+  export async function getPhoto(job, file, kind, signal) {
+    if (job.publicUrl.split('/').pop().startsWith('idle')) await chrome.runtime.sendMessage({target:'background',type:'delay',ms:500});
+    signal.throwIfAborted();
+    if (file.name === '0.png' && kind === 'original' && !job.publicUrl.split('/').pop().startsWith('idle')) throw new Error('Preview fixture');
+    return new Blob([png], {type:'image/png'});
+  }
+  export async function originalUrl() { throw new Error('No remote downloads in this test'); }
+  export async function fetchPhoto() { throw new Error('No VK requests in this isolated UI test'); }
+  `);
+  const context = await workspace.launch(chromium, {
+    extensionPath: extension,
+    executablePath: process.env.CHROMIUM_PATH,
+    headless: true, viewport: { width: 780, height: 600 },
+    ignoreDefaultArgs: ['--disable-background-timer-throttling', '--disable-renderer-backgrounding', '--disable-backgrounding-occluded-windows'],
+    acceptDownloads: true
+  });
+  const id = workspace.extensionId;
   const worker = context.serviceWorkers()[0] || await context.waitForEvent('serviceworker');
-  const id = new URL(worker.url()).host;
   await context.addInitScript(() => {
     if (!window.FileSystemHandle) return;
     const query = FileSystemHandle.prototype.queryPermission;
@@ -486,5 +488,5 @@ try {
     assert(state.ok); assert(state.value.job.summary.done >= Math.min(100, Math.floor(idleSeconds / 2)));
   }
   assert.deepEqual(errors, []);
-  console.log(JSON.stringify({ result: 'passed', output: root, idleSeconds }));
-} finally { await context.close(); }
+  console.log(JSON.stringify({ result: 'passed', idleSeconds }));
+} finally { await workspace.close(); }

@@ -27,8 +27,8 @@ test('VK links canonicalize aliases, legacy chats and viewer URLs without leakin
     assert.deepEqual(parseLink(url), { provider: 'vk', peerId: 101, publicUrl: link, path: '/' });
   }
   assert.equal(parseVkLink('https://vk.com/im?sel=c15').peerId, 2000000015);
-  for (const url of ['https://vk.ru/feed', 'https://vk.ru/im', 'http://vk.ru/im/convo/1', 'https://vk.ru.evil/im/convo/1',
-    'https://vk.ru@evil/im/convo/1', 'https://vk.ru:999/im/convo/1', 'https://vk.ru/im/convo/0']) assert.equal(parseVkLink(url), null);
+  for (const url of ['https://vk.ru/feed', 'https://vk.ru/im', 'http://vk.ru/im/convo/1', 'https://vk.ru.example.test/im/convo/1',
+    'https://vk.ru@example.test/im/convo/1', 'https://vk.ru:999/im/convo/1', 'https://vk.ru/im/convo/0']) assert.equal(parseVkLink(url), null);
 });
 
 test('media URL validation rejects arbitrary hosts, credentials, insecure URLs and misleading suffixes', () => {
@@ -291,14 +291,14 @@ test('plain conversation builds a photo panel link and initializes from latest m
     assert.equal(options.body.get('peer_id'), '101');
     if (method === 'messages.getHistory') {
       assert.equal(options.body.get('count'), '1');
-      return Response.json({ response: { items: [{ conversation_message_id: 140900, text: 'private message' }] } });
+      return Response.json({ response: { items: [{ conversation_message_id: 12345, text: 'private message' }] } });
     }
-    assert.equal(options.body.get('cmid'), '140900'); assert.equal(options.body.get('offset'), '0');
+    assert.equal(options.body.get('cmid'), '12345'); assert.equal(options.body.get('offset'), '0');
     assert.equal(options.body.get('attachment_types'), 'photo');
     return Response.json({ response: { items: [item(100)] } });
   } });
   const result = await h.call({ action: 'page' });
-  assert(result.ok); assert.equal(result.value.startCmid, 140900);
+  assert(result.ok); assert.equal(result.value.startCmid, 12345);
   assert.deepEqual(methods, ['messages.getHistory', 'messages.getHistoryAttachments']);
   assert(!JSON.stringify(result).includes('private message'));
 });
@@ -314,21 +314,21 @@ test('prepare works in a group chat without requesting participant names', async
 });
 
 test('video page bridge uses video payload and returns MP4 fields without player or credentials', async () => {
-  const video = videoItem(99); video.attachment.video.player = 'https://youtube.com/private'; video.attachment.video.access_key = 'PRIVATE';
+  const video = videoItem(99); video.attachment.video.player = 'https://video.example.test/private'; video.attachment.video.access_key = 'PRIVATE';
   video.attachment.video.files.hls = 'https://vkvd360.okcdn.ru/playlist.m3u8';
   const h = pageContext({ response: { items: [video] } });
   const result = await h.call({ action: 'page', mediaType: 'video', cursor: { cmid: 100, position: 1 } });
   assert(result.ok); assert.equal(h.captured().options.body.get('attachment_types'), 'video');
   assert.equal(h.captured().options.body.get('offset'), '1');
-  assert(!/youtube|player|PRIVATE|hls/.test(JSON.stringify(result)));
+  assert(!/video\.example\.test|player|PRIVATE|hls/.test(JSON.stringify(result)));
   assert(result.value.items[0].attachment.video.files.mp4_720);
 });
 
 test('video filter accepts the phrase Видео от with any author, but requires a native VK MP4', () => {
   const job = newJob(link); job.vkVideoTitles = videoTitles;
   const entries = [videoItem(100), videoItem(99, 'Видео от Тестового собеседника'), videoItem(98, 'Мы растем - Весна 2026.mov'),
-    videoItem(97, 'Видео от Постороннего Автора'), videoItem(96, videoTitles[0], { external: 'https://youtube.com/watch?v=1' }),
-    videoItem(95, videoTitles[0], { mp4_1080: 'https://youtube.com/fake.mp4' }),
+    videoItem(97, 'Видео от Постороннего Автора'), videoItem(96, videoTitles[0], { external: 'https://video.example.test/watch?v=1' }),
+    videoItem(95, videoTitles[0], { mp4_1080: 'https://video.example.test/fake.mp4' }),
     videoItem(94, videoTitles[0], { hls_ondemand: 'https://vkvd360.okcdn.ru/video.m3u8' })];
   consumeVkPage(job, inspectVkPage({ items: entries }, null, 'video'), job.directories[1]);
   assert.deepEqual(job.files.map(f => f.state), ['pending', 'pending', 'skipped', 'pending', 'skipped', 'skipped', 'skipped']);
@@ -339,7 +339,7 @@ test('video filter accepts the phrase Видео от with any author, but requi
   for (const title of ['Видео отпуск', 'супервидео от автора', 'Мой ролик', 'Видео отправлено']) {
     assert(!allowedVkVideo(videoResource(videoItem(1, title))));
   }
-  for (const url of ['https://youtube.com/a.mp4', 'https://okcdn.ru.evil.test/a.mp4', 'http://vkvd360.okcdn.ru/a', 'https://vk.ru/video1_1']) assert.throws(() => vkVideoUrl(url));
+  for (const url of ['https://video.example.test/a.mp4', 'https://okcdn.ru.evil.test/a.mp4', 'http://vkvd360.okcdn.ru/a', 'https://vk.ru/video1_1']) assert.throws(() => vkVideoUrl(url));
 });
 
 test('photo and video cursors stay independent and old photo-only jobs gain a resumable video pass', () => {

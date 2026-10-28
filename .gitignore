@@ -13,6 +13,7 @@ downloader-state*.json
 *.dmp
 .env
 .env.*
+!.env.example
 
 # Local date helper state
 downloader-dates.json
@@ -20,3 +21,35 @@ downloader-date-results.json
 .downloader-dates.lock
 __pycache__/
 native-host/config.json
+
+# Machine configuration, credentials and captured diagnostics
+*.local.json
+*.local.toml
+*.pem
+*.key
+*.p12
+*.pfx
+*.sqlite
+*.sqlite3
+*.db
+*.db-journal
+*.7z
+*.rar
+*.tar
+*.gz
+reports/
+screenshots/
+playwright-report/
+test-results/
+coverage/
+profiles/
+browser-profile/
+user-data-dir/
+.auth/
+cookies*.json
+storage-state*.json
+
+# Downloaded media and per-folder user databases
+yandex-disk/
+vk-messager/
+vk-messeger/

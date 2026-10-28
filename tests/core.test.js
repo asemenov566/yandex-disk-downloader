@@ -59,8 +59,8 @@ test('video and non-photo are classified; only zero-byte items are skipped', () 
 });
 
 test('Windows filenames and case collisions cannot escape destination or overwrite each other', () => {
-  assert.equal(safeName('Сочи 2022 '), 'Сочи 2022');
-  assert.equal(safeName('Сочи 2022.'), 'Сочи 2022');
+  assert.equal(safeName('Тестовый альбом '), 'Тестовый альбом');
+  assert.equal(safeName('Тестовый альбом.'), 'Тестовый альбом');
   for (const name of ['..', '../secret', 'C:\\photo', 'NUL', 'con.jpg', 'a:b?.jpg', 'trailing.']) {
     const result = safeName(name);
     assert(!/[<>:"/\\|?*]/.test(result));

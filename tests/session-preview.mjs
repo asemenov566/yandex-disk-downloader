@@ -1,21 +1,22 @@
 // Isolated UI fixtures: no VK/Yandex navigation or remote downloads.
 import { createRequire } from 'node:module';
-import { cp, mkdir, writeFile } from 'node:fs/promises';
+import { mkdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import assert from 'node:assert/strict';
+import { createTestEnvironment, copyTestExtension } from './test-environment.mjs';
 const { chromium } = createRequire(import.meta.url)(process.env.PLAYWRIGHT_MODULE || 'playwright');
-const output = path.resolve('test-output/preview-' + Date.now());
-const extension = path.join(output, 'photo_downloader_smnv'); await mkdir(output, { recursive: true });
-await cp(path.resolve('photo_downloader_smnv'), extension, { recursive: true });
-const context = await chromium.launchPersistentContext(path.join(output, 'profile'), {
-  executablePath: process.env.CHROMIUM_PATH, headless: true, viewport: { width: 780, height: 780 },
-  args: ['--disable-extensions-except=' + extension, '--load-extension=' + extension]
-});
-const errors = [];
-context.on('page', page => page.on('pageerror', error => errors.push(error.message)));
+const workspace = await createTestEnvironment('session-preview');
+const output = workspace.root;
 try {
-  const worker = context.serviceWorkers()[0] || await context.waitForEvent('serviceworker');
-  const base = 'chrome-extension://' + new URL(worker.url()).host;
+  const extension = path.join(output, 'photo_downloader_smnv'); await mkdir(output, { recursive: true });
+  await copyTestExtension(extension);
+  const context = await workspace.launch(chromium, {
+    extensionPath: extension,
+    executablePath: process.env.CHROMIUM_PATH, headless: true, viewport: { width: 780, height: 780 },
+  });
+  const errors = [];
+  context.on('page', page => page.on('pageerror', error => errors.push(error.message)));
+  const base = 'chrome-extension://' + workspace.extensionId;
   await context.addInitScript(() => {
     if (!globalThis.chrome?.runtime?.id) return;
     const summary = { total: 100, done: 80, originals: 75, previews: 5, skipped: 0, failed: 20,
@@ -83,5 +84,5 @@ try {
   });
   await page.waitForFunction(() => document.querySelector('.session-row[data-id="job-1"] .session-status').textContent.includes('photo123'));
   await page.locator('#sessions-card').screenshot({ path: path.join(output, 'sessions-preview.png') });
-  console.log(JSON.stringify({ output }));
-} finally { await context.close(); }
+  console.log(JSON.stringify({ result: 'passed' }));
+} finally { await workspace.close(); }
