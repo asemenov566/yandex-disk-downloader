@@ -12,7 +12,7 @@
 
 ## 1. Скачайте архив
 
-Нажмите **[Скачать расширение](https://github.com/asemenov566/yandex-disk-downloader/releases/latest/download/yandex-disk-downloader.zip)**.
+Нажмите **[Скачать расширение](https://github.com/asemenov566/yandex-disk-vk-downloader-chrome-app/releases/latest/download/yandex-disk-downloader.zip)**.
 
 На компьютер загрузится файл **yandex-disk-downloader.zip**. Обычно он находится в папке «Загрузки».
 

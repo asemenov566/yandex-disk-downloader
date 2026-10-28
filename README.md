@@ -2,7 +2,7 @@
 
 Фото, видео и файлы из публичных папок Яндекс Диска и вложений диалогов ВК — с сохранением на компьютер, продолжением и повтором ошибок.
 
-[Скачать последнюю версию](https://github.com/asemenov566/yandex-disk-downloader/releases/latest) · [Установка](install.md)
+[Скачать последнюю версию](https://github.com/asemenov566/yandex-disk-vk-downloader-chrome-app/releases/latest) · [Установка](install.md)
 
 ## Поддержка ВК
 
@@ -34,7 +34,7 @@
 <p align="center"><img src="photo_downloader_smnv/icons/icon-256.png" width="128" height="128" alt="Иконка: папка с фотографией и стрелкой загрузки"></p>
 
 <p align="center">
-  <a href="https://github.com/asemenov566/yandex-disk-downloader/releases/latest/download/yandex-disk-downloader.zip"><strong>⬇ Скачать расширение</strong></a>
+  <a href="https://github.com/asemenov566/yandex-disk-vk-downloader-chrome-app/releases/latest/download/yandex-disk-downloader.zip"><strong>⬇ Скачать расширение</strong></a>
   &nbsp; · &nbsp;
   <a href="install.md"><strong>Как установить — пошагово</strong></a>
 </p>
